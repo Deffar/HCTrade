@@ -10,6 +10,12 @@ local hookedFrame    = nil
 local hookedIndex    = nil
 local soundMuted     = false   -- mute Alert.ogg (trade notifications)
 local tradeskillMuted = false  -- mute Tradeskill.ogg
+local inventoryAlerts = false  -- alert on WTB items in inventory
+
+-- Inventory cache for WTB matching
+local playerInventory = {}      -- { ["Item Name"] = true, ... }
+local lastInventoryScan = 0     -- timestamp of last scan
+local INVENTORY_SCAN_COOLDOWN = 1.0  -- seconds between scans
 
 -- Quality colour codes (Wowpedia)
 local QUALITY_COLORS = {
@@ -104,6 +110,73 @@ end
 
 local function PlayerLevelInRange(rangeMin, rangeMax)
     return UnitLevel("player") >= rangeMin and UnitLevel("player") <= rangeMax
+end
+
+-- ================================================================
+-- INVENTORY SCANNER
+-- ================================================================
+
+local function ScanInventory()
+    -- Check cooldown
+    local now = GetTime()
+    if now - lastInventoryScan < INVENTORY_SCAN_COOLDOWN then
+        return
+    end
+    lastInventoryScan = now
+    
+    playerInventory = {}
+    
+    -- Scan all bags
+    for bag = 0, 4 do
+        local slots = GetContainerNumSlots(bag)
+        for slot = 1, slots do
+            local link = GetContainerItemLink(bag, slot)
+            if link then
+                -- Extract item name from link
+                local itemName = string.match(link, "%[(.-)%]")
+                if itemName then
+                    -- Check if soulbound (tooltip scan)
+                    local tooltipName = "HCTradeScanTooltip"
+                    if not getglobal(tooltipName) then
+                        CreateFrame("GameTooltip", tooltipName, nil, "GameTooltipTemplate")
+                    end
+                    local tooltip = getglobal(tooltipName)
+                    tooltip:SetOwner(UIParent, "ANCHOR_NONE")
+                    tooltip:SetBagItem(bag, slot)
+                    
+                    local isSoulbound = false
+                    for i = 1, tooltip:NumLines() do
+                        local line = getglobal(tooltipName .. "TextLeft" .. i)
+                        if line then
+                            local text = line:GetText()
+                            if text and (text == ITEM_SOULBOUND or text == ITEM_BIND_ON_PICKUP) then
+                                isSoulbound = true
+                                break
+                            end
+                        end
+                    end
+                    tooltip:Hide()
+                    
+                    -- Add to inventory if not soulbound
+                    if not isSoulbound then
+                        playerInventory[string.lower(itemName)] = true
+                    end
+                end
+            end
+        end
+    end
+    
+    if debugMode then
+        local count = 0
+        for _ in pairs(playerInventory) do count = count + 1 end
+        DEFAULT_CHAT_FRAME:AddMessage("|cffaaaaaa[Inventory] Scanned " .. count .. " tradeable items|r")
+    end
+end
+
+-- Returns true if player has the item in inventory (not equipped, not soulbound)
+local function HasInInventory(itemName)
+    if not inventoryAlerts then return false end
+    return playerInventory[string.lower(itemName)] == true
 end
 
 -- ================================================================
@@ -581,7 +654,7 @@ end
 -- SHOW POPUP
 -- ================================================================
 
-local function ShowPopup(sender, msg, rawMsg, rangeMin, rangeMax, header)
+local function ShowPopup(sender, msg, rawMsg, rangeMin, rangeMax, header, borderColor, customSound)
     local f  = AcquirePopup()
     local GOLD  = "|cffffd100"
     local WHITE = "|cffffffff"
@@ -595,6 +668,16 @@ local function ShowPopup(sender, msg, rawMsg, rangeMin, rangeMax, header)
     f._sender = sender
     f.header:SetText(header or "HCTrade - level match!")
     f.whisperText:SetText("<" .. sender .. ">  |cffaaaaaa[click to whisper]|r")
+    
+    -- Set custom border color if provided (default gold: 1.0, 0.82, 0)
+    if borderColor then
+        f:SetBackdropBorderColor(borderColor.r, borderColor.g, borderColor.b, 1)
+        f.header:SetTextColor(borderColor.r, borderColor.g, borderColor.b)
+    else
+        f:SetBackdropBorderColor(1.0, 0.82, 0, 1)
+        f.header:SetTextColor(1.0, 0.82, 0)
+    end
+    
     -- First pass: wrap at CONTENT_W to find natural line breaks
     local wrappedMsg, lineCount = SmartWrap(rawMsg, CONTENT_W)
 
@@ -641,7 +724,11 @@ local function ShowPopup(sender, msg, rawMsg, rangeMin, rangeMax, header)
     f:Show()
 
     if not soundMuted then
-        PlaySoundFile("Interface\\AddOns\\HCTrade\\Sound\\Alert.ogg")
+        if customSound then
+            PlaySoundFile(customSound)
+        else
+            PlaySoundFile("Interface\\AddOns\\HCTrade\\Sound\\Alert.ogg")
+        end
     end
 end
 
@@ -692,6 +779,32 @@ local function ProcessHCMessage(sender, msg, rawMsg)
             if string.find(string.lower(msg), "wts") then kwHeader = "HCTrade - WTS" end
             ShowPopup(sender, msg, displayMsg, rangeMin, rangeMax, kwHeader)
             return  -- Alert.ogg plays inside ShowPopup already
+        end
+    end
+
+    -- Check for inventory match (WTB items you own)
+    if rangeMin and PlayerLevelInRange(rangeMin, rangeMax) and inventoryAlerts then
+        if debugMode then
+            DEFAULT_CHAT_FRAME:AddMessage("|cffff9900[HCTrade] Checking inventory (enabled: " .. tostring(inventoryAlerts) .. ")...|r")
+        end
+        if string.find(string.lower(msg), "wtb") then
+            -- Extract item names from message
+            for itemName in string.gmatch(msg, "%[(.-)%]") do
+                if debugMode then
+                    DEFAULT_CHAT_FRAME:AddMessage("|cffaaaaaa[Inventory] Testing item: '" .. itemName .. "'|r")
+                end
+                if HasInInventory(itemName) then
+                    if debugMode then
+                        DEFAULT_CHAT_FRAME:AddMessage("|cff00cc00[Inventory] Match found: " .. itemName .. "|r")
+                    end
+                    -- Green-gold border for "You have this!" alerts with custom Inventory sound
+                    ShowPopup(sender, msg, rawMsg or msg, rangeMin, rangeMax, "HCTrade - You have this!", {r=0.4, g=0.8, b=0.2}, "Interface\\AddOns\\HCTrade\\Sound\\Inventory.ogg")
+                    return
+                end
+            end
+            if debugMode then
+                DEFAULT_CHAT_FRAME:AddMessage("|cffff4444[Inventory] No match found|r")
+            end
         end
     end
 
@@ -793,12 +906,14 @@ end
 local eventFrame = CreateFrame("Frame")
 eventFrame:RegisterEvent("VARIABLES_LOADED")
 eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
+eventFrame:RegisterEvent("BAG_UPDATE")
 eventFrame:SetScript("OnEvent", function()
     if event == "VARIABLES_LOADED" then
         if HCTradeDB.anchorX     then ANCHOR_X       = HCTradeDB.anchorX     end
         if HCTradeDB.anchorY     then ANCHOR_Y       = HCTradeDB.anchorY     end
         if HCTradeDB.soundMuted  ~= nil then soundMuted      = HCTradeDB.soundMuted  end
         if HCTradeDB.tradeskillMuted ~= nil then tradeskillMuted = HCTradeDB.tradeskillMuted end
+        if HCTradeDB.inventoryAlerts ~= nil then inventoryAlerts = HCTradeDB.inventoryAlerts end
         if HCTradeDB.fadeHold    then FADE_HOLD      = HCTradeDB.fadeHold    end
         -- Load custom keywords
         customKeywords = {}
@@ -808,12 +923,17 @@ eventFrame:SetScript("OnEvent", function()
             end
         end
         ScanProfessions()
+        ScanInventory()
     end
     if event == "PLAYER_ENTERING_WORLD" then
         ScanProfessions()
+        ScanInventory()
         if not hookedFrame then
             HookHCFrame()
         end
+    end
+    if event == "BAG_UPDATE" then
+        ScanInventory()
     end
 end)
 
@@ -919,7 +1039,7 @@ local function CreateMenuFrame()
 
     menuFrame = CreateFrame("Frame", "HCTradeMenu", UIParent)
     menuFrame:SetWidth(260)
-    menuFrame:SetHeight(263)
+    menuFrame:SetHeight(281)  -- Increased from 263 to accommodate inventory alerts checkbox
     menuFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
     menuFrame:SetFrameStrata("DIALOG")
     menuFrame:SetMovable(true)
@@ -1140,7 +1260,7 @@ local function CreateMenuFrame()
         DEFAULT_CHAT_FRAME:AddMessage("|cffffd100HCTrade:|r Anchor position reset.")
     end)
 
-    -- Row 2+3: Sound checkboxes
+    -- Row 2+3+4: Sound checkboxes
     menuFrame.chkSound = MakeCheckbox("Trade sound", -58, not soundMuted, function(checked)
         soundMuted = not checked
         HCTradeDB.soundMuted = soundMuted
@@ -1149,13 +1269,20 @@ local function CreateMenuFrame()
         tradeskillMuted = not checked
         HCTradeDB.tradeskillMuted = tradeskillMuted
     end)
+    menuFrame.chkInventory = MakeCheckbox("Inventory alerts (WTB items you own)", -94, inventoryAlerts, function(checked)
+        inventoryAlerts = checked
+        HCTradeDB.inventoryAlerts = inventoryAlerts
+        if inventoryAlerts then
+            ScanInventory()
+        end
+    end)
 
-    -- Row 4: Test Notification (left half) and Popup Hold Time Slider (right half)
-    MakeHalfBtn("Test Notification", PAD, -104, function() SlashCmdList["HCT"]("test") end)
+    -- Row 5: Test Notification (left half) and Popup Hold Time Slider (right half)
+    MakeHalfBtn("Test Notification", PAD, -122, function() SlashCmdList["HCT"]("test") end)
 
     -- Popup Hold Time Slider (right side, centered vertically with button)
     local sliderX = PAD + HALF_W + 4
-    local sliderY = -108  -- Center vertically with 22px button height
+    local sliderY = -126  -- Center vertically with 22px button height (adjusted for new checkbox)
 
     local holdSlider = CreateFrame("Slider", "HCTradeHoldSlider", menuFrame)
     holdSlider:SetOrientation("HORIZONTAL")
@@ -1196,13 +1323,13 @@ local function CreateMenuFrame()
     -- Divider 1
     local div1 = menuFrame:CreateTexture(nil, "ARTWORK")
     div1:SetHeight(1)
-    div1:SetPoint("TOPLEFT",  menuFrame, "TOPLEFT",  PAD, -136)
-    div1:SetPoint("TOPRIGHT", menuFrame, "TOPRIGHT", -PAD, -136)
+    div1:SetPoint("TOPLEFT",  menuFrame, "TOPLEFT",  PAD, -154)
+    div1:SetPoint("TOPRIGHT", menuFrame, "TOPRIGHT", -PAD, -154)
     div1:SetTexture(0.3, 0.3, 0.3, 1)
 
     -- Custom Keywords title
     local kwTitle = menuFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    kwTitle:SetPoint("TOPLEFT", menuFrame, "TOPLEFT", PAD, -143)
+    kwTitle:SetPoint("TOPLEFT", menuFrame, "TOPLEFT", PAD, -161)
     kwTitle:SetText("Custom Keywords  |cffaaaaaa(|r|cffffffff/hct |r|cff00ffffls|r|cffaaaaaa)|r")
     kwTitle:SetTextColor(1.0, 0.82, 0)
 
@@ -1210,7 +1337,7 @@ local function CreateMenuFrame()
     local kwInput = CreateFrame("EditBox", "HCTradeKWInput", menuFrame)
     kwInput:SetFontObject(GameFontHighlightSmall)
     kwInput:SetWidth(HALF_W) kwInput:SetHeight(18)
-    kwInput:SetPoint("TOPLEFT", menuFrame, "TOPLEFT", PAD, -160)
+    kwInput:SetPoint("TOPLEFT", menuFrame, "TOPLEFT", PAD, -178)
     kwInput:SetAutoFocus(false)
     kwInput:SetMaxLetters(30)
     kwInput:SetBackdrop({
@@ -1317,20 +1444,20 @@ local function CreateMenuFrame()
     end)
 
     -- List button (right side, same row as add)
-    MakeHalfBtn("Print List", PAD + HALF_W + 4, -188, function()
+    MakeHalfBtn("Print List", PAD + HALF_W + 4, -206, function()
         SlashCmdList["HCT"]("ls")
     end)
 
     -- Divider 2
     local div2 = menuFrame:CreateTexture(nil, "ARTWORK")
     div2:SetHeight(1)
-    div2:SetPoint("TOPLEFT",  menuFrame, "TOPLEFT",  PAD, -220)
-    div2:SetPoint("TOPRIGHT", menuFrame, "TOPRIGHT", -PAD, -220)
+    div2:SetPoint("TOPLEFT",  menuFrame, "TOPLEFT",  PAD, -238)
+    div2:SetPoint("TOPRIGHT", menuFrame, "TOPRIGHT", -PAD, -238)
     div2:SetTexture(0.3, 0.3, 0.3, 1)
 
     -- Help | Close
-    MakeHalfBtn("Help",  PAD,               -227, function() SlashCmdList["HCT"]("help") end)
-    MakeHalfBtn("Close", PAD + HALF_W + 4,  -227, function() menuFrame:Hide() end)
+    MakeHalfBtn("Help",  PAD,               -245, function() SlashCmdList["HCT"]("help") end)
+    MakeHalfBtn("Close", PAD + HALF_W + 4,  -245, function() menuFrame:Hide() end)
 
     menuFrame:Hide()
 end
@@ -1352,6 +1479,7 @@ local function ToggleMenu()
     -- Sync checkboxes
     if menuFrame.chkSound     then menuFrame.chkSound:SetChecked(    not soundMuted      and 1 or 0) end
     if menuFrame.chkTradeskill then menuFrame.chkTradeskill:SetChecked(not tradeskillMuted and 1 or 0) end
+    if menuFrame.chkInventory  then menuFrame.chkInventory:SetChecked( inventoryAlerts     and 1 or 0) end
     if menuFrame:IsVisible() then
         menuFrame:Hide()
     else
