@@ -11,7 +11,8 @@
 * **One-Click Whispers**: Clicking the player's name in the alert automatically opens a whisper to that sender.
 * **Adjustable Layout**: Move and lock the notification area anywhere on your screen using a dedicated anchor.
 <img width="371" height="309" alt="image" src="https://github.com/user-attachments/assets/1f593cfc-cdaf-4fd2-a381-ab964af0ddcd" />
-<img width="363" height="186" alt="image" src="https://github.com/user-attachments/assets/b921bbac-e834-4cf9-88cb-d47bf34eefb9" />
+<img width="363" height="185" alt="image" src="https://github.com/user-attachments/assets/3c185b80-a442-4d58-98af-02a051c5c554" />
+
 
 
 ---
