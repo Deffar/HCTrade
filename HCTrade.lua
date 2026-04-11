@@ -34,8 +34,8 @@
 -- ================================================================
 -- LUA 5.0 COMPATIBILITY (for older WoW 1.12.1 clients)
 -- ================================================================
--- Some WoW clients use Lua 5.0 which doesn't have string.match
--- This shim provides string.match using string.find + string.sub
+-- Some WoW clients use Lua 5.0 which doesn't have string.match or string.gmatch
+-- This shim provides compatibility using string.find and string.gfind
 
 if not string.match then
     string.match = function(s, pattern, init)
@@ -46,6 +46,11 @@ if not string.match then
         end
         return nil
     end
+end
+
+if not string.gmatch then
+    -- In Lua 5.0, it's called string.gfind
+    string.gmatch = string.gfind
 end
 
 HCTrade = HCTrade or {}
