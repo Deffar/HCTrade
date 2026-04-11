@@ -27,13 +27,13 @@ The addon automatically attempts to find and monitor a chat tab named **"HC"** u
 
 ### Commands
 
-* **`/hct menu`**: Opens the settings panel to toggle sounds and test alerts. |
-* **`/hct help`**: Lists the available commands in chat. |
-* **`/hct unlock`**: Shows a drag handle to change where alerts appear. |
-* **`/hct lock`**: Saves the anchor position and hides the handle. |
-* **`/hct test`**: Generates sample alerts to verify your setup. |
-* **`/hct status`**: Shows which chat tab is currently being monitored. |
-* **`/hct hook #`**: Manually attaches the addon to a specific chat window number. |
+* **`/hct menu`**: Opens the settings panel to toggle sounds and test alerts.
+* **`/hct help`**: Lists the available commands in chat.
+* **`/hct unlock`**: Shows a drag handle to change where alerts appear.
+* **`/hct lock`**: Saves the anchor position and hides the handle.
+* **`/hct test`**: Generates sample alerts to verify your setup.
+* **`/hct status`**: Shows which chat tab is currently being monitored.
+* **`/hct hook #`**: Manually attaches the addon to a specific chat window number.
 
 ---
 
