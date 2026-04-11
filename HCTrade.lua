@@ -1,44 +1,90 @@
 -- HCTrade.lua
+-- 
+-- Hardcore WoW (1.12.1) Trade Notification Addon
+-- 
+-- Monitors the HC chat channel for WTS/WTB messages and displays popup notifications
+-- when trades match your character's level range (±5 levels by default).
+--
+-- Features:
+-- - Level-based filtering (parses formats like "28+-", "25-30", "lvl 27")
+-- - Custom keyword alerts (notify on specific items/words)
+-- - Profession matching (alerts when someone needs your profession)
+-- - Inventory alerts (special notification for WTB items you own)
+-- - Item color coding (shows items in their quality colors if you own them)
+-- - Bank scanning (tracks items in bank, alerts even when bank is closed)
+-- - Configurable sounds, popup duration, and position
+-- - WTB filtering (optionally only show WTB if you own the items)
+--
+-- Type /hct help for commands
+--
+-- CODE STRUCTURE GUIDE:
+-- 1. Configuration & State Variables (lines ~25-80)
+-- 2. Level Range Parser - extracts "28+-" style levels from messages  
+-- 3. Helper Functions - IsTradeMessage, PlayerLevelInRange
+-- 4. Inventory Scanner - scans bags/bank, caches items you own
+-- 5. Profession Scanner - detects your professions for LF/LFW matching
+-- 6. Custom Keyword Matching - checks for user-defined alert words
+-- 7. Popup System - creates notification frames, handles stacking/fading
+-- 8. Item Color Caching - scans tooltips to get item quality colors
+-- 9. Message Hook - intercepts HC chat messages and triggers alerts
+-- 10. Settings GUI - /hct menu panel for configuration
+-- 11. Event Handlers - VARIABLES_LOADED, BAG_UPDATE, BANKFRAME_OPENED, etc.
+-- 12. Slash Commands - /hct debug, /hct test, /hct menu, etc.
 
 HCTrade = HCTrade or {}
 HCTradeDB = HCTradeDB or {}
 
-local TRADE_RANGE    = 5
-local debugMode      = false
-local sniffMode      = false
-local hookedFrame    = nil
-local hookedIndex    = nil
-local soundMuted     = false   -- mute Alert.ogg (trade notifications)
-local tradeskillMuted = false  -- mute Tradeskill.ogg
-local inventoryAlerts = false  -- alert on WTB items in inventory
-local onlyOwnedWTB   = false   -- only show WTB if you own the item
+-- ================================================================
+-- CONFIGURATION & STATE VARIABLES
+-- ================================================================
 
--- Inventory cache for WTB matching
+local TRADE_RANGE    = 5  -- Level range tolerance (±5 levels)
+local debugMode      = false   -- Print debug messages
+local sniffMode      = false   -- Print all raw HC chat messages
+local hookedFrame    = nil     -- The chat frame we're monitoring
+local hookedIndex    = nil     -- Chat frame number (1-10)
+local soundMuted     = false   -- Mute Alert.ogg (trade notifications)
+local tradeskillMuted = false  -- Mute Tradeskill.ogg (profession alerts)
+local inventoryAlerts = false  -- Enable special alerts for WTB items you own
+local onlyOwnedWTB   = false   -- Filter: only show WTB if you own at least one item
+
+-- Inventory tracking for "You have this!" alerts
 local playerInventory = {}      -- { ["Item Name"] = {inBags=true, inBank=false}, ... }
-local lastInventoryScan = 0     -- timestamp of last scan
-local INVENTORY_SCAN_COOLDOWN = 1.0  -- seconds between scans
-local bankCache = {}            -- Cached bank items: { ["Item Name"] = true, ... }
-local bankOpen = false          -- Track if bank window is open
-local itemColorCache = {}       -- Cache item colors: { ["Item Name"] = "|cffXXXXXX", ... }
+local lastInventoryScan = 0     -- Timestamp of last inventory scan
+local INVENTORY_SCAN_COOLDOWN = 1.0  -- Seconds between scans (prevents spam)
+local bankCache = {}            -- Cached bank items (persists when bank is closed)
+local bankOpen = false          -- Whether bank window is currently open
+local itemColorCache = {}       -- Cached item quality colors: { ["Item Name"] = "|cffXXXXXX", ... }
 
--- Quality colour codes (Wowpedia)
+-- ================================================================
+-- ITEM QUALITY & CUSTOM KEYWORDS
+-- ================================================================
+
+-- Item quality color codes (standard WoW colors)
+-- Used for displaying items in their proper colors in popups
 local QUALITY_COLORS = {
-    ["Junk"]     = "|cff9d9d9d",
-    ["Common"]   = "|cffffffff",
-    ["Uncommon"] = "|cff1eff00",
-    ["Rare"]     = "|cff0070ff",
-    ["Epic"]     = "|cffa335ee",
+    ["Junk"]     = "|cff9d9d9d",  -- Gray
+    ["Common"]   = "|cffffffff",  -- White
+    ["Uncommon"] = "|cff1eff00",  -- Green
+    ["Rare"]     = "|cff0070ff",  -- Blue
+    ["Epic"]     = "|cffa335ee",  -- Purple
 }
 
--- Custom keyword list: { keyword="armor kit", color="|cff...", display="[Armor Kit]" }
--- Loaded from HCTradeDB.customKeywords on login
+-- Custom keyword alerts: user-defined words/items to watch for
+-- Format: { keyword="armor kit", color="|cff...", display="[Armor Kit]", quality="Uncommon" }
+-- Loaded from SavedVariables (HCTradeDB.customKeywords) on login
 local customKeywords = {}
 
--- Player professions: scanned on login/zone change
--- { shortname="BS", fullname="Blacksmithing" }
+-- ================================================================
+-- PROFESSION DETECTION
+-- ================================================================
+
+-- Player's known professions (scanned on login and zone change)
+-- Format: { {shortname="BS", fullname="Blacksmithing"}, ... }
 local playerProfessions = {}
 
--- Profession abbreviation map
+-- Profession abbreviation mapping for LF/LFW detection
+-- Maps full profession names to common abbreviations used in trade chat
 local PROF_ABBREVS = {
     ["blacksmithing"] = {"bs","blacksmith","blacksmithing"},
     ["leatherworking"] = {"lw","lws","leatherworking","leatherworker"},
@@ -57,21 +103,34 @@ local PROF_ABBREVS = {
 -- ================================================================
 -- LEVEL RANGE PARSER
 -- ================================================================
+-- Extracts level information from trade messages
+-- Supports formats:
+--   "28+-", "28+", "28-"       → 23-33 (±5 from base)
+--   "28±"                      → 23-33 (±5 from base)
+--   "25-30"                    → 25-30 (explicit range)
+--   "lvl 27", "lv 27"          → 22-32 (±5 from level)
+--   Bare numbers (fallback)    → ±5 from number
+-- Returns: rangeMin, rangeMax (or nil if no level found)
 
 local function ParseLevelRange(msg)
     local s = string.lower(msg)
 
+    -- Pattern 1: "28+-", "28+--", etc. (at end of message)
     local base = string.match(s, "(%d+)%s*[%+%-][%+%-%/]+$")
     if not base then
+        -- Pattern 2: "28+-" followed by non-digit
         base = string.match(s, "(%d+)%s*[%+%-][%+%-%/]+[^%d]")
     end
     if not base then
+        -- Pattern 3: "28±" (plus-minus symbol, UTF-8 encoded as \194\177)
         base = string.match(s, "(%d+)%s*\194\177")
     end
     if not base then
+        -- Pattern 4: "28+" or "28-" at end
         base = string.match(s, "(%d+)%s*[%+%-]$")
     end
     if not base then
+        -- Pattern 5: "28+" or "28-" followed by non-digit/non-symbol
         base = string.match(s, "(%d+)%s*[%+%-][^%+%-%d/]")
     end
     if base then
@@ -81,6 +140,7 @@ local function ParseLevelRange(msg)
         end
     end
 
+    -- Pattern 6: Explicit range "25-30"
     local a, b = string.match(s, "(%d+)%s*%-%s*(%d+)")
     if a and b then
         a, b = tonumber(a), tonumber(b)
@@ -89,6 +149,7 @@ local function ParseLevelRange(msg)
         end
     end
 
+    -- Pattern 7: "lvl 27", "lv 27"
     local lvl = string.match(s, "lv[le]*%.?%s*(%d+)")
     if lvl then
         lvl = tonumber(lvl)
@@ -97,6 +158,8 @@ local function ParseLevelRange(msg)
         end
     end
 
+    -- Fallback: Use first valid number found (±5 range)
+
     for num in string.gmatch(s, "%d+") do
         local n = tonumber(num)
         if n and n >= 1 and n <= 60 then
@@ -104,14 +167,20 @@ local function ParseLevelRange(msg)
         end
     end
 
-    return nil, nil
+    return nil, nil  -- No valid level found
 end
 
+-- ================================================================
+-- HELPER FUNCTIONS
+-- ================================================================
+
+-- Check if message contains WTS or WTB
 local function IsTradeMessage(msg)
     local s = string.lower(msg)
     return string.find(s, "wts") or string.find(s, "wtb")
 end
 
+-- Check if player's level is within the specified range
 local function PlayerLevelInRange(rangeMin, rangeMax)
     return UnitLevel("player") >= rangeMin and UnitLevel("player") <= rangeMax
 end
@@ -119,18 +188,22 @@ end
 -- ================================================================
 -- INVENTORY SCANNER
 -- ================================================================
+-- Scans player bags and bank for items
+-- Creates a cache: playerInventory["Item Name"] = {inBags=bool, inBank=bool}
+-- Bank items persist in bankCache when bank is closed
+-- Called on BAG_UPDATE, BANKFRAME_OPENED, and periodically with cooldown
 
 local function ScanInventory()
-    -- Check cooldown
+    -- Throttle scanning to prevent spam (max once per second)
     local now = GetTime()
     if now - lastInventoryScan < INVENTORY_SCAN_COOLDOWN then
         return
     end
     lastInventoryScan = now
     
-    playerInventory = {}
+    playerInventory = {}  -- Reset cache
     
-    -- Helper function to check if item is soulbound
+    -- Helper function: Check if item is soulbound (we don't want to alert on these)
     local function IsSoulbound(bag, slot)
         local tooltipName = "HCTradeScanTooltip"
         if not getglobal(tooltipName) then
@@ -253,19 +326,24 @@ end
 -- ================================================================
 -- PROFESSION SCANNER
 -- ================================================================
+-- Scans the player's skill list to detect known professions
+-- Stores them in playerProfessions table with abbreviations for matching
+-- Called on login and zone change
 
 local function ScanProfessions()
     playerProfessions = {}
     for i = 1, GetNumSkillLines() do
         local name, isHeader, _, rank = GetSkillLineInfo(i)
+        -- Only include actual skills (not headers) with skill rank > 0
         if name and not isHeader and rank and rank > 0 then
             local lower = string.lower(name)
+            -- Match against known profession abbreviations
             for profKey, abbrevs in pairs(PROF_ABBREVS) do
                 if lower == profKey then
                     table.insert(playerProfessions, {
                         fullname = name,
                         key      = profKey,
-                        abbrevs  = abbrevs,
+                        abbrevs  = abbrevs,  -- List of abbreviations to match
                         rank     = rank,
                     })
                     break
@@ -275,12 +353,18 @@ local function ScanProfessions()
     end
 end
 
--- Crafting-related keywords that indicate a crafting request
+-- ================================================================
+-- PROFESSION MATCHING (LF/LFW Detection)
+-- ================================================================
+
+-- Keywords that indicate someone is looking for crafting services
+-- "LF BS", "LFW enchanter", "need BS my mats", etc.
 local CRAFT_KEYWORDS = {
     "craft", "make", "create", "my mats", "your mats", "my matz", "your matz"
 }
 
--- Items associated with each profession for crafting detection
+-- Items commonly associated with each profession
+-- Used to detect requests like "LF leather worker for armor kit"
 local PROFESSION_ITEMS = {
     ["blacksmithing"] = {"armor", "weapon", "shield", "plate", "mail", "sharpening stone", "weightstone"},
     ["leatherworking"] = {"leather", "hide", "skinning knife", "armor kit", "cloak", "bag", "salt", "salt shaker", "shaker"},
@@ -338,6 +422,13 @@ local function MatchesProfession(msg)
     
     return nil
 end
+
+-- ================================================================
+-- CUSTOM KEYWORD MATCHING
+-- ================================================================
+-- Checks if message matches any user-defined custom keywords
+-- Returns: keyword object {keyword, color, display, quality} or nil
+-- Supports exact match, plural matching ("wand" matches "wands"), and singular matching
 
 -- Returns the matching custom keyword entry (case-insensitive)
 local function MatchesCustomKeyword(msg)
@@ -732,49 +823,54 @@ local function RecolourItems(plainText, rawMsg)
                     end
                 end
                 
-                -- Read quality from tooltip
+                -- Found the item in bags/bank - now read its color from tooltip
                 if foundBag and foundSlot then
                     HCTradeScanTooltip:SetOwner(UIParent, "ANCHOR_NONE")
                     HCTradeScanTooltip:ClearLines()
-                    HCTradeScanTooltip:SetBagItem(foundBag, foundSlot)
+                    HCTradeScanTooltip:SetBagItem(foundBag, foundSlot)  -- Load item into tooltip
                     
-                    -- Get the item name line (first line) and check its color
+                    -- Read the RGB color of the first line (item name)
                     local nameText = getglobal("HCTradeScanTooltipTextLeft1")
                     if nameText then
-                        local r, g, b = nameText:GetTextColor()
+                        local r, g, b = nameText:GetTextColor()  -- Get RGB values (0.0-1.0)
                         
                         if debugMode then
                             DEFAULT_CHAT_FRAME:AddMessage("|cffaaaaaa[Tooltip] RGB = " .. string.format("%.2f, %.2f, %.2f", r, g, b) .. "|r")
                         end
                         
-                        -- Determine quality from color
-                        -- Poor (gray): 0.62, 0.62, 0.62
-                        -- Common (white): 1, 1, 1
-                        -- Uncommon (green): 0.12, 1, 0
-                        -- Rare (blue): 0, 0.44, 0.87
-                        -- Epic (purple): 0.64, 0.21, 0.93
+                        -- Map RGB color to quality code
+                        -- Reference RGB values from WoW 1.12.1:
+                        -- Poor (gray):     0.62, 0.62, 0.62
+                        -- Common (white):  1.0,  1.0,  1.0
+                        -- Uncommon (green): 0.12, 1.0,  0.0
+                        -- Rare (blue):     0.0,  0.44, 0.87
+                        -- Epic (purple):   0.64, 0.21, 0.93
                         
                         if r > 0.6 and g > 0.6 and b > 0.6 then
-                            -- Gray (poor) or White (common)
+                            -- High values on all channels = gray or white
                             if r > 0.9 then
-                                colorCode = QUALITY_COLORS["Common"] or "|cffffffff"
+                                colorCode = QUALITY_COLORS["Common"] or "|cffffffff"  -- White
                             else
-                                colorCode = QUALITY_COLORS["Junk"] or "|cff9d9d9d"
+                                colorCode = QUALITY_COLORS["Junk"] or "|cff9d9d9d"  -- Gray
                             end
                         elseif g > 0.9 and r < 0.2 and b < 0.2 then
+                            -- High green, low red/blue = uncommon (green)
                             colorCode = QUALITY_COLORS["Uncommon"] or "|cff1eff00"
                         elseif b > 0.8 and r < 0.2 and g < 0.5 then
+                            -- High blue, low red/green = rare (blue)
                             colorCode = QUALITY_COLORS["Rare"] or "|cff0070ff"
                         elseif r > 0.6 and b > 0.8 and g < 0.3 then
+                            -- High red+blue, low green = epic (purple)
                             colorCode = QUALITY_COLORS["Epic"] or "|cffa335ee"
                         else
-                            colorCode = "|cffffffff"  -- Default to white
+                            colorCode = "|cffffffff"  -- Default to white if can't determine
                         end
                         
                         if debugMode then
                             DEFAULT_CHAT_FRAME:AddMessage("|cffaaaaaa[Tooltip] Assigned colorCode = '" .. (colorCode or "nil") .. "'|r")
                         end
                         
+                        -- Cache the color permanently (saved to HCTradeDB on logout)
                         itemColorCache[itemName] = colorCode
                         if debugMode then
                             DEFAULT_CHAT_FRAME:AddMessage("|cffaaaaaa[RecolourItems] Found & cached: [" .. itemName .. "] RGB(" .. string.format("%.2f,%.2f,%.2f",r,g,b) .. ") color=" .. colorCode .. "|r")
@@ -906,15 +1002,28 @@ local function ShowPopup(sender, msg, rawMsg, rangeMin, rangeMax, header, border
 end
 
 -- ================================================================
--- CORE PROCESSOR
+-- CORE MESSAGE PROCESSOR
 -- ================================================================
+-- Main entry point for processing HC chat messages
+-- Flow:
+-- 1. Check if message contains WTS/WTB
+-- 2. Parse level range from message
+-- 3. Check if player's level is in range
+-- 4. Priority checks (in order):
+--    a. Custom keywords - user-defined alerts
+--    b. Inventory alerts - WTB items you own
+--    c. Profession matches - LF BS, LF enchanter, etc.
+--    d. Standard trade match - any WTS/WTB in level range
+-- Each check returns early if it triggers, so only one popup per message
 
 local function ProcessHCMessage(sender, msg, rawMsg)
+    -- Ignore non-trade messages
     if not IsTradeMessage(msg) then return end
 
     local rangeMin, rangeMax = ParseLevelRange(msg)
     local pl = UnitLevel("player")
 
+    -- Debug output: show what we parsed
     if debugMode then
         local GOLD  = "|cffffd100"
         local WHITE = "|cffffffff"
@@ -935,27 +1044,29 @@ local function ProcessHCMessage(sender, msg, rawMsg)
         DEFAULT_CHAT_FRAME:AddMessage(GOLD .. "  => raw msg fed to parser: |r|cffffffff" .. msg .. "|r")
     end
 
-    -- Check for custom keyword match (always notify if level matches, regardless of profession)
+    -- PRIORITY 1: Custom keyword match (highest priority)
+    -- Check for user-defined keywords (e.g., "wand", "armor kit")
+    -- These trigger regardless of profession/inventory
     if rangeMin and PlayerLevelInRange(rangeMin, rangeMax) then
         if debugMode then
             DEFAULT_CHAT_FRAME:AddMessage("|cffff9900[HCTrade] Checking custom keywords...|r")
         end
         local kw = MatchesCustomKeyword(msg)
         if kw then
-            -- Build a rawMsg that highlights the keyword
+            -- Build display message with keyword highlighted in its chosen color
             local displayMsg = rawMsg or msg
-            -- Replace the keyword in the display with coloured [Keyword]
             local escaped = string.gsub(kw.keyword, "([%[%]%(%)%.%+%-%*%?%^%$%%])", "%%%1")
             local coloured = kw.color .. "[" .. kw.display .. "]|r"
             displayMsg = string.gsub(displayMsg, escaped, coloured)
             local kwHeader = "HCTrade - WTB"
             if string.find(string.lower(msg), "wts") then kwHeader = "HCTrade - WTS" end
             ShowPopup(sender, msg, displayMsg, rangeMin, rangeMax, kwHeader)
-            return  -- Alert.ogg plays inside ShowPopup already
+            return  -- Early return - Alert.ogg plays inside ShowPopup
         end
     end
 
-    -- Check for inventory match (WTB items you own)
+    -- PRIORITY 2: Inventory match - WTB items you own
+    -- Special green notification when someone wants to buy items you have
     if rangeMin and PlayerLevelInRange(rangeMin, rangeMax) and inventoryAlerts then
         if debugMode then
             DEFAULT_CHAT_FRAME:AddMessage("|cffff9900[HCTrade] Checking inventory (enabled: " .. tostring(inventoryAlerts) .. ")...|r")
@@ -999,18 +1110,20 @@ local function ProcessHCMessage(sender, msg, rawMsg)
             if not tradeskillMuted then
                 PlaySoundFile("Interface\\AddOns\\HCTrade\\Sound\\Tradeskill.ogg")
             end
-            return
+            return  -- Early return
         end
     end
 
-    -- Standard trade match
-    if not rangeMin then return end
-    if not PlayerLevelInRange(rangeMin, rangeMax) then return end
+    -- PRIORITY 4: Standard trade match
+    -- Any WTS/WTB message that matches level range
+    -- (This is the fallback if none of the above matched)
+    if not rangeMin then return end  -- No level found in message
+    if not PlayerLevelInRange(rangeMin, rangeMax) then return end  -- Out of level range
     
-    -- Filter WTB messages if onlyOwnedWTB is enabled
+    -- Optional filter: "Only show WTB if you own at least one item"
+    -- If enabled, skip WTB messages unless they mention items you have
     local isWTB = string.find(string.lower(msg), "wtb")
     if onlyOwnedWTB and isWTB then
-        -- Check if message contains any items we own
         local hasOwnedItem = false
         for itemName in string.gmatch(msg, "%[(.-)%]") do
             if HasInInventory(itemName) then
@@ -1019,23 +1132,25 @@ local function ProcessHCMessage(sender, msg, rawMsg)
             end
         end
         
-        -- Skip this WTB if we don't own any of the items
         if not hasOwnedItem then
             if debugMode then
                 DEFAULT_CHAT_FRAME:AddMessage("|cffaaaaaa[Filter] WTB filtered (no owned items, onlyOwnedWTB=true)|r")
             end
-            return
+            return  -- Skip this WTB
         end
     end
     
+    -- Show standard trade notification
     local tradeHeader = "HCTrade - WTB"
     if string.find(string.lower(msg), "wts") then tradeHeader = "HCTrade - WTS" end
     ShowPopup(sender, msg, rawMsg or msg, rangeMin, rangeMax, tradeHeader)
 end
 
 -- ================================================================
--- FRAME HOOK
+-- CHAT FRAME HOOK
 -- ================================================================
+-- Intercepts messages added to the HC chat frame
+-- Extracts sender name and message text, then processes for trade alerts
 
 local function DoHook(frame, label)
     if hookedFrame == frame then return end
@@ -1114,8 +1229,16 @@ local function HookHCFrame()
 end
 
 -- ================================================================
--- EVENTS
+-- EVENT HANDLERS
 -- ================================================================
+-- Responds to game events to keep data synchronized:
+-- - VARIABLES_LOADED: Load saved settings from WTF folder
+-- - PLAYER_ENTERING_WORLD: Scan professions/inventory, hook HC frame
+-- - PLAYER_LOGOUT: Save item color cache to disk
+-- - BAG_UPDATE: Rescan inventory when items change
+-- - BANKFRAME_OPENED: Mark bank as open, scan bank items
+-- - BANKFRAME_CLOSED: Mark bank as closed, save bank cache
+-- - PLAYERBANKSLOTS_CHANGED: Rescan bank if window is open
 
 local eventFrame = CreateFrame("Frame")
 eventFrame:RegisterEvent("VARIABLES_LOADED")
@@ -1127,6 +1250,7 @@ eventFrame:RegisterEvent("BANKFRAME_CLOSED")
 eventFrame:RegisterEvent("PLAYERBANKSLOTS_CHANGED")
 eventFrame:SetScript("OnEvent", function()
     if event == "VARIABLES_LOADED" then
+        -- Load all saved settings from HCTradeDB (SavedVariables)
         if HCTradeDB.anchorX     then ANCHOR_X       = HCTradeDB.anchorX     end
         if HCTradeDB.anchorY     then ANCHOR_Y       = HCTradeDB.anchorY     end
         if HCTradeDB.soundMuted  ~= nil then soundMuted      = HCTradeDB.soundMuted  end
@@ -1134,34 +1258,44 @@ eventFrame:SetScript("OnEvent", function()
         if HCTradeDB.inventoryAlerts ~= nil then inventoryAlerts = HCTradeDB.inventoryAlerts end
         if HCTradeDB.onlyOwnedWTB ~= nil then onlyOwnedWTB = HCTradeDB.onlyOwnedWTB end
         if HCTradeDB.fadeHold    then FADE_HOLD      = HCTradeDB.fadeHold    end
-        -- Load custom keywords
+        
+        -- Load custom keywords list
         customKeywords = {}
         if HCTradeDB.customKeywords then
             for _, kw in ipairs(HCTradeDB.customKeywords) do
                 table.insert(customKeywords, kw)
             end
         end
-        -- Load cached bank items
+        
+        -- Load bank item cache (persists when bank is closed)
         if HCTradeDB.bankCache then
             bankCache = HCTradeDB.bankCache
         end
-        -- Load cached item colors
+        
+        -- Load item color cache (prevents re-scanning items every session)
         if HCTradeDB.itemColorCache then
             itemColorCache = HCTradeDB.itemColorCache
         end
-        ScanProfessions()
-        ScanInventory()
+        
+        ScanProfessions()  -- Detect player's professions
+        ScanInventory()    -- Initial inventory scan
     end
+    
     if event == "PLAYER_ENTERING_WORLD" then
+        -- Rescan on login/reload (professions might have changed)
         ScanProfessions()
         ScanInventory()
+        -- Auto-hook HC chat frame if not already hooked
         if not hookedFrame then
             HookHCFrame()
         end
     end
+    
     if event == "BAG_UPDATE" then
+        -- Rescan inventory when items are added/removed from bags
         ScanInventory()
     end
+    
     if event == "BANKFRAME_OPENED" then
         bankOpen = true
         ScanInventory()
@@ -1740,6 +1874,20 @@ local function ToggleMenu()
 end
 
 -- ================================================================
+-- SLASH COMMANDS
+-- ================================================================
+-- Command interface for users to control the addon
+-- Main commands:
+-- /hct or /hct menu - Open settings GUI
+-- /hct debug - Toggle debug output
+-- /hct sniff - Print all raw HC messages
+-- /hct status - List chat frames
+-- /hct hook N - Manually hook chat frame number N
+-- /hct test - Spawn test popups
+-- /hct unlock/lock - Position adjustment mode
+-- /hct ls - List custom keywords
+-- /hct rm N - Remove custom keyword number N
+-- /hct help [command] - Show help
 
 SLASH_HCTRADE1 = "/hctrade"
 SlashCmdList["HCTRADE"] = function()
@@ -1751,18 +1899,20 @@ SlashCmdList["HCT"] = function(msg)
     local cmd = string.lower(string.gsub(msg or "", "^%s*(.-)%s*$", "%1"))
 
     if cmd == "" then
-        -- /hct with no arguments opens menu
+        -- /hct with no arguments opens the settings GUI
         ToggleMenu()
 
     elseif cmd == "menu" then
         ToggleMenu()
 
     elseif cmd == "debug" then
+        -- Toggle debug mode: prints detailed message processing info
         debugMode = not debugMode
         local state = debugMode and "|cff00cc00ON|r" or "|cffff4444OFF|r"
         DEFAULT_CHAT_FRAME:AddMessage("|cffffd100HCTrade:|r Debug " .. state)
 
     elseif cmd == "sniff" then
+        -- Toggle sniff mode: prints ALL raw messages in hooked frame
         sniffMode = not sniffMode
         local state = sniffMode and "|cff00cc00ON|r" or "|cffff4444OFF|r"
         DEFAULT_CHAT_FRAME:AddMessage("|cffffd100HCTrade:|r Sniff " .. state ..
@@ -1772,6 +1922,7 @@ SlashCmdList["HCT"] = function(msg)
         end
 
     elseif cmd == "status" then
+        -- List all chat frames and show which one is hooked
         DEFAULT_CHAT_FRAME:AddMessage("|cffffd100HCTrade:|r Chat frame tabs:")
         for i = 1, 10 do
             local frame = getglobal("ChatFrame" .. i)
@@ -1913,4 +2064,22 @@ SlashCmdList["HCT"] = function(msg)
     end
 end
 
+-- ================================================================
+-- ADDON LOADED
+-- ================================================================
+-- Print confirmation message when addon loads successfully
+
 DEFAULT_CHAT_FRAME:AddMessage("|cffffd100HCTrade:|r Loaded. Type |cffffffff/hct help|r for commands.")
+
+-- End of HCTrade.lua
+--
+-- SAVED VARIABLES (stored in WTF/Account/ACCOUNT/SavedVariables/HCTrade.lua):
+-- - HCTradeDB.anchorX, anchorY - Popup position
+-- - HCTradeDB.soundMuted - Trade notification sound toggle
+-- - HCTradeDB.tradeskillMuted - Profession alert sound toggle
+-- - HCTradeDB.inventoryAlerts - "Owned items sound" toggle
+-- - HCTradeDB.onlyOwnedWTB - "Only WTB items you own" filter
+-- - HCTradeDB.fadeHold - Popup duration (5-30 seconds)
+-- - HCTradeDB.customKeywords - User-defined keyword alerts
+-- - HCTradeDB.bankCache - Cached bank items (persists when bank closed)
+-- - HCTradeDB.itemColorCache - Cached item quality colors
