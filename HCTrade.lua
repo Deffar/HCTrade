@@ -1472,7 +1472,7 @@ SlashCmdList["HCT"] = function(msg)
         DEFAULT_CHAT_FRAME:AddMessage("|cffffd100HCTrade:|r Test: 3 trade popups + " .. profCount .. " profession popup(s) for level " .. pl .. ".")
 
     elseif cmd == "help" or cmd == "" then
-        DEFAULT_CHAT_FRAME:AddMessage("|cffffd100HCTrade:|r To get help, type |cffffffff/hct help |cff00ffffcorrect<command>|r for details.")
+        DEFAULT_CHAT_FRAME:AddMessage("|cffffd100HCTrade:|r To get help, type |cffffffff/hct help |cff00ffff<command>|r for details.")
         DEFAULT_CHAT_FRAME:AddMessage("|cffffd100HCTrade:|r Example: |cffffffff/hct help |cff00ffffstatus|r")
         DEFAULT_CHAT_FRAME:AddMessage("|cffffd100HCTrade:|r List of commands:")
         DEFAULT_CHAT_FRAME:AddMessage("  |cffffffff/hct |cff00ffffmenu|r   |cffffffff/hct |cff00fffftest|r    |cffffffff/hct |cff00ffffunlock|r  |cffffffff/hct |cff00fffflock|r")
