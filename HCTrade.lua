@@ -31,6 +31,23 @@
 -- 11. Event Handlers - VARIABLES_LOADED, BAG_UPDATE, BANKFRAME_OPENED, etc.
 -- 12. Slash Commands - /hct debug, /hct test, /hct menu, etc.
 
+-- ================================================================
+-- LUA 5.0 COMPATIBILITY (for older WoW 1.12.1 clients)
+-- ================================================================
+-- Some WoW clients use Lua 5.0 which doesn't have string.match
+-- This shim provides string.match using string.find + string.sub
+
+if not string.match then
+    string.match = function(s, pattern, init)
+        init = init or 1
+        local i, j, c1, c2, c3, c4, c5, c6, c7, c8, c9 = string.find(s, pattern, init)
+        if i then
+            return c1, c2, c3, c4, c5, c6, c7, c8, c9
+        end
+        return nil
+    end
+end
+
 HCTrade = HCTrade or {}
 HCTradeDB = HCTradeDB or {}
 
