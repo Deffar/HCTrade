@@ -10,6 +10,9 @@
 * **Level Proximity Matching**: Detects level ranges (e.g., "10-20", "25+-", "40±") and triggers an alert if your character is within 5 levels of the trade.
 * **One-Click Whispers**: Clicking the player's name in the alert automatically opens a whisper to that sender.
 * **Adjustable Layout**: Move and lock the notification area anywhere on your screen using a dedicated anchor.
+<img width="371" height="309" alt="image" src="https://github.com/user-attachments/assets/1f593cfc-cdaf-4fd2-a381-ab964af0ddcd" />
+<img width="363" height="186" alt="image" src="https://github.com/user-attachments/assets/b921bbac-e834-4cf9-88cb-d47bf34eefb9" />
+
 
 ---
 
