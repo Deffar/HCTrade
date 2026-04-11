@@ -139,11 +139,18 @@ local CRAFT_KEYWORDS = {
 -- Items associated with each profession for crafting detection
 local PROFESSION_ITEMS = {
     ["blacksmithing"] = {"armor", "weapon", "shield", "plate", "mail", "sharpening stone", "weightstone"},
-    ["leatherworking"] = {"leather", "hide", "skinning knife", "armor kit", "cloak", "bag"},
-    ["tailoring"] = {"cloth", "bag", "robe", "shirt", "netherweave", "mageweave", "runecloth", "silk"},
-    ["engineering"] = {"bomb", "scope", "goggles", "trinket", "target dummy", "rocket", "grenade"},
+    ["leatherworking"] = {"leather", "hide", "skinning knife", "armor kit", "cloak", "bag", "salt", "salt shaker", "shaker"},
+    ["tailoring"] = {"cloth", "bag", "robe", "shirt", "mageweave", "runecloth", "silk", "wool", "linen"},
+    ["engineering"] = {"bomb", "scope", "goggles", "target dummy", "rocket", "grenade", "dynamite"},
     ["alchemy"] = {"potion", "elixir", "flask", "transmute"},
     ["enchanting"] = {"enchant", "enchanting"},
+    ["herbalism"] = {"herb", "flower", "leaf", "bloom", "root", "weed"},
+    ["mining"] = {"ore", "mining", "bar"},
+    ["skinning"] = {"leather", "hide", "skinning knife", "pelt", "fur"},
+    ["fishing"] = {"fish", "fishing"},
+    ["cooking"] = {"food", "cooking", "food buff"},
+    ["first aid"] = {"bandage", "first aid"},
+    ["jewelcrafting"] = {"gem", "jewelcrafting", "jewelry", "ring", "necklace", "trinket", "neck", "finger", "wrist"},
 }
 
 -- Returns the matching profession entry if msg mentions one of the player's professions
