@@ -7,9 +7,8 @@
 ## Features
 
 * **Hardcore Chat Filtering**: Scans messages specifically within the Hardcore channel for trade activity.
-* **Level Proximity Matching**: Detects level ranges (e.g., "10-20", "25+", "lvl 40") and triggers an alert if your character is within 5 levels of the trade.
+* **Level Proximity Matching**: Detects level ranges (e.g., "10-20", "25+-", "40±") and triggers an alert if your character is within 5 levels of the trade.
 * **One-Click Whispers**: Clicking the player's name in the alert automatically opens a whisper to that sender.
-* **Visual Item Coloring**: Re-applies item quality colors (Green, Blue, Epic) to the text in the alert for quick identification.
 * **Adjustable Layout**: Move and lock the notification area anywhere on your screen using a dedicated anchor.
 
 ---
@@ -28,15 +27,13 @@ The addon automatically attempts to find and monitor a chat tab named **"HC"** u
 
 ### Commands
 
-| Command | Action |
-| :--- | :--- |
-| **`/hct menu`** | Opens the settings panel to toggle sounds and test alerts. |
-| **`/hct help`** | Lists the available commands in chat. |
-| **`/hct unlock`** | Shows a drag handle to change where alerts appear. |
-| **`/hct lock`** | Saves the anchor position and hides the handle. |
-| **`/hct test`** | Generates sample alerts to verify your setup. |
-| **`/hct status`** | Shows which chat tab is currently being monitored. |
-| **`/hct hook #`** | Manually attaches the addon to a specific chat window number. |
+* **`/hct menu`**: Opens the settings panel to toggle sounds and test alerts. |
+* **`/hct help`**: Lists the available commands in chat. |
+* **`/hct unlock`**: Shows a drag handle to change where alerts appear. |
+* **`/hct lock`**: Saves the anchor position and hides the handle. |
+* **`/hct test`**: Generates sample alerts to verify your setup. |
+* **`/hct status`**: Shows which chat tab is currently being monitored. |
+* **`/hct hook #`**: Manually attaches the addon to a specific chat window number. |
 
 ---
 
