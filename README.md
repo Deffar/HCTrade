@@ -16,10 +16,10 @@
 * **Adjustable Layout**: Move and lock the notification area anywhere on your screen using a dedicated anchor.
 * **Sound Alerts**: Separate sounds for trade notifications and profession requests (can be muted independently).
 
-* <img width="438" height="448" alt="image" src="https://github.com/user-attachments/assets/025f85be-9045-472f-9ece-88f072f6d4b2" />
-* <img width="416" height="209" alt="image" src="https://github.com/user-attachments/assets/bea21427-5d61-4db3-8b13-3202782f372c" />
-* <img width="273" height="161" alt="image" src="https://github.com/user-attachments/assets/bb668588-86cb-48b5-bbf7-970d7fc05163" />
-* <img width="271" height="137" alt="image" src="https://github.com/user-attachments/assets/4a27d623-6d76-4a3c-beea-445c8c1a84fa" />
+  <img width="438" height="448" alt="image" src="https://github.com/user-attachments/assets/025f85be-9045-472f-9ece-88f072f6d4b2" />
+  <img width="416" height="209" alt="image" src="https://github.com/user-attachments/assets/bea21427-5d61-4db3-8b13-3202782f372c" />
+  <img width="273" height="161" alt="image" src="https://github.com/user-attachments/assets/bb668588-86cb-48b5-bbf7-970d7fc05163" />
+  <img width="271" height="137" alt="image" src="https://github.com/user-attachments/assets/4a27d623-6d76-4a3c-beea-445c8c1a84fa" />
 
 
 
