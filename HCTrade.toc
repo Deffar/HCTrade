@@ -2,7 +2,7 @@
 ## Title: HCTrade
 ## Notes: Notifies you when a level-matched WTS/WTB appears in the HC channel. Type '/hct menu' to open the in game menu.
 ## Author: You
-## Version: 1.1
+## Version: 1.2
 ## SavedVariables: HCTradeDB
 
 HCTrade.lua
