@@ -125,7 +125,7 @@ local function AcquirePopup()
         end
     end
 
-    local f = CreateFrame("Frame", nil, UIParent)
+  local f = CreateFrame("Frame", nil, UIParent)
     f:SetWidth(200)
     f:SetHeight(90)
     f:SetFrameStrata("HIGH")
@@ -157,6 +157,7 @@ local function AcquirePopup()
     })
     closeBtn:SetBackdropColor(0, 0, 0, 1)
     closeBtn:SetBackdropBorderColor(0.3, 0.3, 0.3, 1)
+
     local xStr = closeBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     xStr:SetAllPoints(closeBtn)
     xStr:SetJustifyH("CENTER") xStr:SetJustifyV("MIDDLE")
@@ -169,11 +170,12 @@ local function AcquirePopup()
     whisperBtn:SetHeight(14)
     whisperBtn:SetWidth(200)
     whisperBtn:SetPoint("TOPLEFT", f, "TOPLEFT", 8, -22)
+
     local whisperText = whisperBtn:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     whisperText:SetPoint("TOPLEFT",     whisperBtn, "TOPLEFT",     0, 0)
     whisperText:SetPoint("BOTTOMRIGHT", whisperBtn, "BOTTOMRIGHT", 0, 0)
     whisperText:SetJustifyH("LEFT")
-    whisperText:SetTextColor(1.0, 0.82, 0)
+    whisperText:SetTextColor(1.0, 0, 1.0)
     f.whisperBtn  = whisperBtn
     f.whisperText = whisperText
     whisperBtn:SetScript("OnClick", function()
@@ -182,20 +184,27 @@ local function AcquirePopup()
         end
     end)
 
+    local rangeText = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    rangeText:SetPoint("TOPLEFT", f, "TOPLEFT", 8, -38)
+    rangeText:SetWidth(200)
+    rangeText:SetHeight(14)
+    rangeText:SetJustifyH("LEFT")
+    f.rangeText = rangeText
+
+    local div = f:CreateTexture(nil, "ARTWORK")
+    div:SetHeight(1)
+    div:SetPoint("TOPLEFT", f, "TOPLEFT", 8, -54)
+    div:SetPoint("TOPRIGHT", f, "TOPRIGHT", -8, -54)
+    div:SetTexture(0.3, 0.3, 0.3, 1)
+    f.divider = div
+
     local msgText = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    msgText:SetPoint("TOPLEFT", f, "TOPLEFT", 8, -36)
+    msgText:SetPoint("TOPLEFT", f, "TOPLEFT", 8, -60)
     msgText:SetWidth(200)
     msgText:SetJustifyH("LEFT")
     msgText:SetNonSpaceWrap(false)
     msgText:SetTextColor(1, 1, 1)
     f.msgText = msgText
-
-    local rangeText = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    rangeText:SetPoint("TOPLEFT", msgText, "BOTTOMLEFT", 0, -4)
-    rangeText:SetWidth(200)
-    rangeText:SetHeight(14)
-    rangeText:SetJustifyH("LEFT")
-    f.rangeText = rangeText
 
     f.timer = 0
     f:SetScript("OnUpdate", function()
