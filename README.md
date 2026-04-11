@@ -20,7 +20,7 @@
 ## Installation
 1.  Download this repository
 2.  Navigate to your WoW directory: `Interface\AddOns`.
-3.  Place the `HCTrade` folder into this directory.
+3.  Place the `HCTrade` folder into this directory. (remove the text -main from the folder name if it's there)
 4.  Restart the game or reload your UI.
 
 ---
