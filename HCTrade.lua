@@ -11,11 +11,15 @@ local hookedIndex    = nil
 local soundMuted     = false   -- mute Alert.ogg (trade notifications)
 local tradeskillMuted = false  -- mute Tradeskill.ogg
 local inventoryAlerts = false  -- alert on WTB items in inventory
+local onlyOwnedWTB   = false   -- only show WTB if you own the item
 
 -- Inventory cache for WTB matching
-local playerInventory = {}      -- { ["Item Name"] = true, ... }
+local playerInventory = {}      -- { ["Item Name"] = {inBags=true, inBank=false}, ... }
 local lastInventoryScan = 0     -- timestamp of last scan
 local INVENTORY_SCAN_COOLDOWN = 1.0  -- seconds between scans
+local bankCache = {}            -- Cached bank items: { ["Item Name"] = true, ... }
+local bankOpen = false          -- Track if bank window is open
+local itemColorCache = {}       -- Cache item colors: { ["Item Name"] = "|cffXXXXXX", ... }
 
 -- Quality colour codes (Wowpedia)
 local QUALITY_COLORS = {
@@ -126,57 +130,124 @@ local function ScanInventory()
     
     playerInventory = {}
     
-    -- Scan all bags
+    -- Helper function to check if item is soulbound
+    local function IsSoulbound(bag, slot)
+        local tooltipName = "HCTradeScanTooltip"
+        if not getglobal(tooltipName) then
+            CreateFrame("GameTooltip", tooltipName, nil, "GameTooltipTemplate")
+        end
+        local tooltip = getglobal(tooltipName)
+        tooltip:SetOwner(UIParent, "ANCHOR_NONE")
+        tooltip:SetBagItem(bag, slot)
+        
+        local isSoulbound = false
+        for i = 1, tooltip:NumLines() do
+            local line = getglobal(tooltipName .. "TextLeft" .. i)
+            if line then
+                local text = line:GetText()
+                if text and (text == ITEM_SOULBOUND or text == ITEM_BIND_ON_PICKUP) then
+                    isSoulbound = true
+                    break
+                end
+            end
+        end
+        tooltip:Hide()
+        return isSoulbound
+    end
+    
+    -- Scan bags (0-4)
     for bag = 0, 4 do
         local slots = GetContainerNumSlots(bag)
         for slot = 1, slots do
             local link = GetContainerItemLink(bag, slot)
             if link then
-                -- Extract item name from link
                 local itemName = string.match(link, "%[(.-)%]")
-                if itemName then
-                    -- Check if soulbound (tooltip scan)
-                    local tooltipName = "HCTradeScanTooltip"
-                    if not getglobal(tooltipName) then
-                        CreateFrame("GameTooltip", tooltipName, nil, "GameTooltipTemplate")
-                    end
-                    local tooltip = getglobal(tooltipName)
-                    tooltip:SetOwner(UIParent, "ANCHOR_NONE")
-                    tooltip:SetBagItem(bag, slot)
-                    
-                    local isSoulbound = false
-                    for i = 1, tooltip:NumLines() do
-                        local line = getglobal(tooltipName .. "TextLeft" .. i)
-                        if line then
-                            local text = line:GetText()
-                            if text and (text == ITEM_SOULBOUND or text == ITEM_BIND_ON_PICKUP) then
-                                isSoulbound = true
-                                break
-                            end
-                        end
-                    end
-                    tooltip:Hide()
-                    
-                    -- Add to inventory if not soulbound
-                    if not isSoulbound then
-                        playerInventory[string.lower(itemName)] = true
+                if itemName and not IsSoulbound(bag, slot) then
+                    local lowerName = string.lower(itemName)
+                    if not playerInventory[lowerName] then
+                        playerInventory[lowerName] = {inBags = true, inBank = false}
+                    else
+                        playerInventory[lowerName].inBags = true
                     end
                 end
             end
         end
     end
     
+    -- Scan bank (bags 5-11 + bank slots -1) if bank is open
+    if bankOpen then
+        -- Scan bank bags (5-11)
+        for bag = 5, 11 do
+            local slots = GetContainerNumSlots(bag)
+            if slots and slots > 0 then
+                for slot = 1, slots do
+                    local link = GetContainerItemLink(bag, slot)
+                    if link then
+                        local itemName = string.match(link, "%[(.-)%]")
+                        if itemName and not IsSoulbound(bag, slot) then
+                            local lowerName = string.lower(itemName)
+                            if not playerInventory[lowerName] then
+                                playerInventory[lowerName] = {inBags = false, inBank = true}
+                            else
+                                playerInventory[lowerName].inBank = true
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        
+        -- Scan main bank (bag -1)
+        local numBankSlots = GetNumBankSlots()
+        for slot = 1, numBankSlots do
+            local link = GetContainerItemLink(-1, slot)
+            if link then
+                local itemName = string.match(link, "%[(.-)%]")
+                if itemName and not IsSoulbound(-1, slot) then
+                    local lowerName = string.lower(itemName)
+                    if not playerInventory[lowerName] then
+                        playerInventory[lowerName] = {inBags = false, inBank = true}
+                    else
+                        playerInventory[lowerName].inBank = true
+                    end
+                end
+            end
+        end
+        
+        -- Update cached bank items
+        bankCache = {}
+        for itemName, locations in pairs(playerInventory) do
+            if locations.inBank then
+                bankCache[itemName] = true
+            end
+        end
+    else
+        -- Merge cached bank items when bank is closed
+        for itemName, _ in pairs(bankCache) do
+            if not playerInventory[itemName] then
+                playerInventory[itemName] = {inBags = false, inBank = true}
+            else
+                playerInventory[itemName].inBank = true
+            end
+        end
+    end
+    
     if debugMode then
-        local count = 0
-        for _ in pairs(playerInventory) do count = count + 1 end
-        DEFAULT_CHAT_FRAME:AddMessage("|cffaaaaaa[Inventory] Scanned " .. count .. " tradeable items|r")
+        local bagCount = 0
+        local bankCount = 0
+        for _, locations in pairs(playerInventory) do
+            if locations.inBags then bagCount = bagCount + 1 end
+            if locations.inBank then bankCount = bankCount + 1 end
+        end
+        DEFAULT_CHAT_FRAME:AddMessage("|cffaaaaaa[Inventory] Scanned " .. bagCount .. " bag items, " .. bankCount .. " bank items|r")
     end
 end
 
--- Returns true if player has the item in inventory (not equipped, not soulbound)
+-- Returns location info if player has the item in inventory (not equipped, not soulbound)
+-- Returns: nil if not found, or {inBags=bool, inBank=bool}
 local function HasInInventory(itemName)
-    if not inventoryAlerts then return false end
-    return playerInventory[string.lower(itemName)] == true
+    if not inventoryAlerts then return nil end
+    return playerInventory[string.lower(itemName)]
 end
 
 -- ================================================================
@@ -458,7 +529,7 @@ local function AcquirePopup()
     msgText:SetWidth(200)
     msgText:SetJustifyH("LEFT")
     msgText:SetNonSpaceWrap(false)
-    msgText:SetTextColor(1, 1, 1)
+    -- Don't set text color - let color codes in the text work
     f.msgText = msgText
 
     f.timer = 0
@@ -599,44 +670,146 @@ local WTB_COLOUR = "|cff7aaac8"
 local RESET_CODE = "|r"
 
 local function RecolourItems(plainText, rawMsg)
-    -- Build a table mapping item name -> colour code from rawMsg
-    -- rawMsg contains patterns like: |cffXXXXXX[Item Name]|r
-    -- or from game links: |cffXXXXXX|Hitem:...|h[Item Name]|h|r
-    local itemColours = {}
+    -- Since HC addon strips color codes, we need to find item colors ourselves
+    -- Scan bags for items and read their quality from tooltips
+    
+    if debugMode then
+        DEFAULT_CHAT_FRAME:AddMessage("|cffaaaaaa[RecolourItems] plainText: " .. plainText .. "|r")
+    end
 
-    -- Pattern 1: plain colour code before [Item]
-    -- e.g. |cff1eff00[Greater Magic Wand]|r
-    local searchPos = 1
-    while true do
-        local cs, ce = string.find(rawMsg, "|c%x%x%x%x%x%x%x%x", searchPos)
-        if not cs then break end
-        local colCode = string.sub(rawMsg, cs, ce)
-        -- Find the next [ after this colour code (skipping any |H link data)
-        local bracketS = string.find(rawMsg, "%[", ce + 1)
-        if bracketS and bracketS <= ce + 30 then
-            local bracketE = string.find(rawMsg, "%]", bracketS)
-            if bracketE then
-                local itemName = string.sub(rawMsg, bracketS, bracketE)
-                itemColours[itemName] = colCode
+    local result = plainText
+    local itemsFound = {}
+    
+    -- Create tooltip for scanning if it doesn't exist
+    if not HCTradeScanTooltip then
+        CreateFrame("GameTooltip", "HCTradeScanTooltip", nil, "GameTooltipTemplate")
+    end
+    
+    -- Find all [Item Name] patterns in the message
+    for itemName in string.gmatch(plainText, "%[(.-)%]") do
+        if not itemsFound[itemName] then
+            itemsFound[itemName] = true
+            
+            local colorCode = itemColorCache[itemName]  -- Check cache first
+            
+            if debugMode then
+                DEFAULT_CHAT_FRAME:AddMessage("|cffaaaaaa[Cache Check] itemName='" .. itemName .. "' cached value='" .. (colorCode or "nil") .. "'|r")
+            end
+            
+            if not colorCode or colorCode == "" then
+                -- Scan bags for this item
+                local foundBag, foundSlot = nil, nil
+                for bag = 0, 4 do
+                    for slot = 1, GetContainerNumSlots(bag) do
+                        local link = GetContainerItemLink(bag, slot)
+                        if link then
+                            local linkItemName = string.match(link, "%[(.-)%]")
+                            if linkItemName and linkItemName == itemName then
+                                foundBag = bag
+                                foundSlot = slot
+                                break
+                            end
+                        end
+                    end
+                    if foundBag then break end
+                end
+                
+                -- If not in bags, check bank if open
+                if not foundBag and bankOpen then
+                    for bag = 5, 11 do
+                        for slot = 1, GetContainerNumSlots(bag) or 0 do
+                            local link = GetContainerItemLink(bag, slot)
+                            if link then
+                                local linkItemName = string.match(link, "%[(.-)%]")
+                                if linkItemName and linkItemName == itemName then
+                                    foundBag = bag
+                                    foundSlot = slot
+                                    break
+                                end
+                            end
+                        end
+                        if foundBag then break end
+                    end
+                end
+                
+                -- Read quality from tooltip
+                if foundBag and foundSlot then
+                    HCTradeScanTooltip:SetOwner(UIParent, "ANCHOR_NONE")
+                    HCTradeScanTooltip:ClearLines()
+                    HCTradeScanTooltip:SetBagItem(foundBag, foundSlot)
+                    
+                    -- Get the item name line (first line) and check its color
+                    local nameText = getglobal("HCTradeScanTooltipTextLeft1")
+                    if nameText then
+                        local r, g, b = nameText:GetTextColor()
+                        
+                        if debugMode then
+                            DEFAULT_CHAT_FRAME:AddMessage("|cffaaaaaa[Tooltip] RGB = " .. string.format("%.2f, %.2f, %.2f", r, g, b) .. "|r")
+                        end
+                        
+                        -- Determine quality from color
+                        -- Poor (gray): 0.62, 0.62, 0.62
+                        -- Common (white): 1, 1, 1
+                        -- Uncommon (green): 0.12, 1, 0
+                        -- Rare (blue): 0, 0.44, 0.87
+                        -- Epic (purple): 0.64, 0.21, 0.93
+                        
+                        if r > 0.6 and g > 0.6 and b > 0.6 then
+                            -- Gray (poor) or White (common)
+                            if r > 0.9 then
+                                colorCode = QUALITY_COLORS["Common"] or "|cffffffff"
+                            else
+                                colorCode = QUALITY_COLORS["Junk"] or "|cff9d9d9d"
+                            end
+                        elseif g > 0.9 and r < 0.2 and b < 0.2 then
+                            colorCode = QUALITY_COLORS["Uncommon"] or "|cff1eff00"
+                        elseif b > 0.8 and r < 0.2 and g < 0.5 then
+                            colorCode = QUALITY_COLORS["Rare"] or "|cff0070ff"
+                        elseif r > 0.6 and b > 0.8 and g < 0.3 then
+                            colorCode = QUALITY_COLORS["Epic"] or "|cffa335ee"
+                        else
+                            colorCode = "|cffffffff"  -- Default to white
+                        end
+                        
+                        if debugMode then
+                            DEFAULT_CHAT_FRAME:AddMessage("|cffaaaaaa[Tooltip] Assigned colorCode = '" .. (colorCode or "nil") .. "'|r")
+                        end
+                        
+                        itemColorCache[itemName] = colorCode
+                        if debugMode then
+                            DEFAULT_CHAT_FRAME:AddMessage("|cffaaaaaa[RecolourItems] Found & cached: [" .. itemName .. "] RGB(" .. string.format("%.2f,%.2f,%.2f",r,g,b) .. ") color=" .. colorCode .. "|r")
+                        end
+                    end
+                    HCTradeScanTooltip:Hide()
+                elseif debugMode then
+                    DEFAULT_CHAT_FRAME:AddMessage("|cffff4444[RecolourItems] Item not in bags/bank - will show white|r")
+                end
+            else
+                if debugMode then
+                    DEFAULT_CHAT_FRAME:AddMessage("|cffaaaaaa[RecolourItems] Using cached color for [" .. itemName .. "]: " .. colorCode .. "|r")
+                end
+            end
+            
+            if colorCode then
+                -- Escape special pattern characters in the item name
+                local escapedName = string.gsub(itemName, "([%[%]%(%)%.%+%-%*%?%^%$%%])", "%%%1")
+                -- Match [ItemName] with any character (including newline) after
+                local pattern = "(%[" .. escapedName .. "%])"
+                local replacement = colorCode .. "[" .. itemName .. "]" .. RESET_CODE
+                
+                if debugMode then
+                    DEFAULT_CHAT_FRAME:AddMessage("|cffaaaaaa[Replace] Pattern: '" .. pattern .. "'|r")
+                    DEFAULT_CHAT_FRAME:AddMessage("|cffaaaaaa[Replace] With: '" .. replacement .. "'|r")
+                    DEFAULT_CHAT_FRAME:AddMessage("|cffaaaaaa[Replace] Before: '" .. result .. "'|r")
+                end
+                
+                result = string.gsub(result, pattern, replacement)
+                
+                if debugMode then
+                    DEFAULT_CHAT_FRAME:AddMessage("|cffaaaaaa[Replace] After: '" .. result .. "'|r")
+                end
             end
         end
-        searchPos = ce + 1
-    end
-
-    -- Apply colours to plain text: find each [Item] and wrap it
-    local result = plainText
-    -- Sort by length descending to avoid partial matches
-    local items = {}
-    for name, _ in pairs(itemColours) do
-        table.insert(items, name)
-    end
-    table.sort(items, function(a, b) return string.len(a) > string.len(b) end)
-
-    for _, name in ipairs(items) do
-        local col = itemColours[name]
-        -- Escape magic chars in name for gsub
-        local escaped = string.gsub(name, "([%[%]%(%)%.%+%-%*%?%^%$%%])", "%%%1")
-        result = string.gsub(result, escaped, col .. name .. RESET_CODE)
     end
 
     -- Recolour WTS and WTB (match at start or after space/newline)
@@ -793,12 +966,22 @@ local function ProcessHCMessage(sender, msg, rawMsg)
                 if debugMode then
                     DEFAULT_CHAT_FRAME:AddMessage("|cffaaaaaa[Inventory] Testing item: '" .. itemName .. "'|r")
                 end
-                if HasInInventory(itemName) then
+                local location = HasInInventory(itemName)
+                if location then
                     if debugMode then
                         DEFAULT_CHAT_FRAME:AddMessage("|cff00cc00[Inventory] Match found: " .. itemName .. "|r")
                     end
+                    -- Build header based on location
+                    local locationText = ""
+                    if location.inBags and location.inBank then
+                        locationText = " (Bags + Bank)"
+                    elseif location.inBags then
+                        locationText = " (In Bags)"
+                    elseif location.inBank then
+                        locationText = " (In Bank)"
+                    end
                     -- Green-gold border for "You have this!" alerts with custom Inventory sound
-                    ShowPopup(sender, msg, rawMsg or msg, rangeMin, rangeMax, "HCTrade - You have this!", {r=0.4, g=0.8, b=0.2}, "Interface\\AddOns\\HCTrade\\Sound\\Inventory.ogg")
+                    ShowPopup(sender, msg, rawMsg or msg, rangeMin, rangeMax, "HCTrade - You have this!" .. locationText, {r=0.4, g=0.8, b=0.2}, "Interface\\AddOns\\HCTrade\\Sound\\Inventory.ogg")
                     return
                 end
             end
@@ -823,6 +1006,28 @@ local function ProcessHCMessage(sender, msg, rawMsg)
     -- Standard trade match
     if not rangeMin then return end
     if not PlayerLevelInRange(rangeMin, rangeMax) then return end
+    
+    -- Filter WTB messages if onlyOwnedWTB is enabled
+    local isWTB = string.find(string.lower(msg), "wtb")
+    if onlyOwnedWTB and isWTB then
+        -- Check if message contains any items we own
+        local hasOwnedItem = false
+        for itemName in string.gmatch(msg, "%[(.-)%]") do
+            if HasInInventory(itemName) then
+                hasOwnedItem = true
+                break
+            end
+        end
+        
+        -- Skip this WTB if we don't own any of the items
+        if not hasOwnedItem then
+            if debugMode then
+                DEFAULT_CHAT_FRAME:AddMessage("|cffaaaaaa[Filter] WTB filtered (no owned items, onlyOwnedWTB=true)|r")
+            end
+            return
+        end
+    end
+    
     local tradeHeader = "HCTrade - WTB"
     if string.find(string.lower(msg), "wts") then tradeHeader = "HCTrade - WTS" end
     ShowPopup(sender, msg, rawMsg or msg, rangeMin, rangeMax, tradeHeader)
@@ -841,6 +1046,10 @@ local function DoHook(frame, label)
         origAddMessage(self, text, r, g, b, id)
         if not text then return end
 
+        if sniffMode then
+            DEFAULT_CHAT_FRAME:AddMessage("|cffffd100[HCTrade sniff - RAW]|r " .. text)
+        end
+
         -- Strip for parsing (plain text only)
         local plain = text
         plain = string.gsub(plain, "|H.-|h(.-)%|h", "%1")
@@ -850,7 +1059,7 @@ local function DoHook(frame, label)
         plain = string.gsub(plain, "|[^|]", "")
 
         if sniffMode then
-            DEFAULT_CHAT_FRAME:AddMessage("|cffffd100[HCTrade sniff]|r " .. plain)
+            DEFAULT_CHAT_FRAME:AddMessage("|cffffd100[HCTrade sniff - PLAIN]|r " .. plain)
         end
 
         -- Extract sender and plain message body for parsing
@@ -876,6 +1085,11 @@ local function DoHook(frame, label)
             rawMsg = string.gsub(rawMsg, "^%[HC%]%s*", "")
         end
         rawMsg = rawMsg or msg
+
+        if debugMode then
+            DEFAULT_CHAT_FRAME:AddMessage("|cffaaaaaa[Hook Debug] Original text param: " .. text .. "|r")
+            DEFAULT_CHAT_FRAME:AddMessage("|cffaaaaaa[Hook Debug] Extracted rawMsg: " .. rawMsg .. "|r")
+        end
 
         ProcessHCMessage(sender, msg, rawMsg)
     end
@@ -906,7 +1120,11 @@ end
 local eventFrame = CreateFrame("Frame")
 eventFrame:RegisterEvent("VARIABLES_LOADED")
 eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
+eventFrame:RegisterEvent("PLAYER_LOGOUT")
 eventFrame:RegisterEvent("BAG_UPDATE")
+eventFrame:RegisterEvent("BANKFRAME_OPENED")
+eventFrame:RegisterEvent("BANKFRAME_CLOSED")
+eventFrame:RegisterEvent("PLAYERBANKSLOTS_CHANGED")
 eventFrame:SetScript("OnEvent", function()
     if event == "VARIABLES_LOADED" then
         if HCTradeDB.anchorX     then ANCHOR_X       = HCTradeDB.anchorX     end
@@ -914,6 +1132,7 @@ eventFrame:SetScript("OnEvent", function()
         if HCTradeDB.soundMuted  ~= nil then soundMuted      = HCTradeDB.soundMuted  end
         if HCTradeDB.tradeskillMuted ~= nil then tradeskillMuted = HCTradeDB.tradeskillMuted end
         if HCTradeDB.inventoryAlerts ~= nil then inventoryAlerts = HCTradeDB.inventoryAlerts end
+        if HCTradeDB.onlyOwnedWTB ~= nil then onlyOwnedWTB = HCTradeDB.onlyOwnedWTB end
         if HCTradeDB.fadeHold    then FADE_HOLD      = HCTradeDB.fadeHold    end
         -- Load custom keywords
         customKeywords = {}
@@ -921,6 +1140,14 @@ eventFrame:SetScript("OnEvent", function()
             for _, kw in ipairs(HCTradeDB.customKeywords) do
                 table.insert(customKeywords, kw)
             end
+        end
+        -- Load cached bank items
+        if HCTradeDB.bankCache then
+            bankCache = HCTradeDB.bankCache
+        end
+        -- Load cached item colors
+        if HCTradeDB.itemColorCache then
+            itemColorCache = HCTradeDB.itemColorCache
         end
         ScanProfessions()
         ScanInventory()
@@ -934,6 +1161,26 @@ eventFrame:SetScript("OnEvent", function()
     end
     if event == "BAG_UPDATE" then
         ScanInventory()
+    end
+    if event == "BANKFRAME_OPENED" then
+        bankOpen = true
+        ScanInventory()
+    end
+    if event == "BANKFRAME_CLOSED" then
+        bankOpen = false
+        -- Save bank cache to DB before closing
+        HCTradeDB.bankCache = bankCache
+        -- Also save item color cache
+        HCTradeDB.itemColorCache = itemColorCache
+    end
+    if event == "PLAYER_LOGOUT" then
+        -- Save item color cache on logout
+        HCTradeDB.itemColorCache = itemColorCache
+    end
+    if event == "PLAYERBANKSLOTS_CHANGED" then
+        if bankOpen then
+            ScanInventory()
+        end
     end
 end)
 
@@ -1039,7 +1286,7 @@ local function CreateMenuFrame()
 
     menuFrame = CreateFrame("Frame", "HCTradeMenu", UIParent)
     menuFrame:SetWidth(260)
-    menuFrame:SetHeight(281)  -- Increased from 263 to accommodate inventory alerts checkbox
+    menuFrame:SetHeight(299)  -- Increased from 281 to accommodate "Only WTB items you own" checkbox
     menuFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
     menuFrame:SetFrameStrata("DIALOG")
     menuFrame:SetMovable(true)
@@ -1260,7 +1507,7 @@ local function CreateMenuFrame()
         DEFAULT_CHAT_FRAME:AddMessage("|cffffd100HCTrade:|r Anchor position reset.")
     end)
 
-    -- Row 2+3+4: Sound checkboxes
+    -- Row 2+3+4+5: Sound and filter checkboxes
     menuFrame.chkSound = MakeCheckbox("Trade sound", -58, not soundMuted, function(checked)
         soundMuted = not checked
         HCTradeDB.soundMuted = soundMuted
@@ -1269,20 +1516,24 @@ local function CreateMenuFrame()
         tradeskillMuted = not checked
         HCTradeDB.tradeskillMuted = tradeskillMuted
     end)
-    menuFrame.chkInventory = MakeCheckbox("Inventory alerts (WTB items you own)", -94, inventoryAlerts, function(checked)
+    menuFrame.chkInventory = MakeCheckbox("Owned items sound", -94, inventoryAlerts, function(checked)
         inventoryAlerts = checked
         HCTradeDB.inventoryAlerts = inventoryAlerts
         if inventoryAlerts then
             ScanInventory()
         end
     end)
+    menuFrame.chkOnlyOwned = MakeCheckbox("Only WTB items you own", -112, onlyOwnedWTB, function(checked)
+        onlyOwnedWTB = checked
+        HCTradeDB.onlyOwnedWTB = onlyOwnedWTB
+    end)
 
-    -- Row 5: Test Notification (left half) and Popup Hold Time Slider (right half)
-    MakeHalfBtn("Test Notification", PAD, -122, function() SlashCmdList["HCT"]("test") end)
+    -- Row 6: Test Notification (left half) and Popup Hold Time Slider (right half)
+    MakeHalfBtn("Test Notification", PAD, -140, function() SlashCmdList["HCT"]("test") end)
 
     -- Popup Hold Time Slider (right side, centered vertically with button)
     local sliderX = PAD + HALF_W + 4
-    local sliderY = -126  -- Center vertically with 22px button height (adjusted for new checkbox)
+    local sliderY = -144  -- Center vertically with 22px button height (adjusted for new checkbox)
 
     local holdSlider = CreateFrame("Slider", "HCTradeHoldSlider", menuFrame)
     holdSlider:SetOrientation("HORIZONTAL")
@@ -1323,13 +1574,13 @@ local function CreateMenuFrame()
     -- Divider 1
     local div1 = menuFrame:CreateTexture(nil, "ARTWORK")
     div1:SetHeight(1)
-    div1:SetPoint("TOPLEFT",  menuFrame, "TOPLEFT",  PAD, -154)
-    div1:SetPoint("TOPRIGHT", menuFrame, "TOPRIGHT", -PAD, -154)
+    div1:SetPoint("TOPLEFT",  menuFrame, "TOPLEFT",  PAD, -172)
+    div1:SetPoint("TOPRIGHT", menuFrame, "TOPRIGHT", -PAD, -172)
     div1:SetTexture(0.3, 0.3, 0.3, 1)
 
     -- Custom Keywords title
     local kwTitle = menuFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    kwTitle:SetPoint("TOPLEFT", menuFrame, "TOPLEFT", PAD, -161)
+    kwTitle:SetPoint("TOPLEFT", menuFrame, "TOPLEFT", PAD, -179)
     kwTitle:SetText("Custom Keywords  |cffaaaaaa(|r|cffffffff/hct |r|cff00ffffls|r|cffaaaaaa)|r")
     kwTitle:SetTextColor(1.0, 0.82, 0)
 
@@ -1337,7 +1588,7 @@ local function CreateMenuFrame()
     local kwInput = CreateFrame("EditBox", "HCTradeKWInput", menuFrame)
     kwInput:SetFontObject(GameFontHighlightSmall)
     kwInput:SetWidth(HALF_W) kwInput:SetHeight(18)
-    kwInput:SetPoint("TOPLEFT", menuFrame, "TOPLEFT", PAD, -178)
+    kwInput:SetPoint("TOPLEFT", menuFrame, "TOPLEFT", PAD, -196)
     kwInput:SetAutoFocus(false)
     kwInput:SetMaxLetters(30)
     kwInput:SetBackdrop({
@@ -1444,20 +1695,20 @@ local function CreateMenuFrame()
     end)
 
     -- List button (right side, same row as add)
-    MakeHalfBtn("Print List", PAD + HALF_W + 4, -206, function()
+    MakeHalfBtn("Print List", PAD + HALF_W + 4, -224, function()
         SlashCmdList["HCT"]("ls")
     end)
 
     -- Divider 2
     local div2 = menuFrame:CreateTexture(nil, "ARTWORK")
     div2:SetHeight(1)
-    div2:SetPoint("TOPLEFT",  menuFrame, "TOPLEFT",  PAD, -238)
-    div2:SetPoint("TOPRIGHT", menuFrame, "TOPRIGHT", -PAD, -238)
+    div2:SetPoint("TOPLEFT",  menuFrame, "TOPLEFT",  PAD, -256)
+    div2:SetPoint("TOPRIGHT", menuFrame, "TOPRIGHT", -PAD, -256)
     div2:SetTexture(0.3, 0.3, 0.3, 1)
 
     -- Help | Close
-    MakeHalfBtn("Help",  PAD,               -245, function() SlashCmdList["HCT"]("help") end)
-    MakeHalfBtn("Close", PAD + HALF_W + 4,  -245, function() menuFrame:Hide() end)
+    MakeHalfBtn("Help",  PAD,               -263, function() SlashCmdList["HCT"]("help") end)
+    MakeHalfBtn("Close", PAD + HALF_W + 4,  -263, function() menuFrame:Hide() end)
 
     menuFrame:Hide()
 end
@@ -1477,9 +1728,10 @@ local function ToggleMenu()
         end
     end
     -- Sync checkboxes
-    if menuFrame.chkSound     then menuFrame.chkSound:SetChecked(    not soundMuted      and 1 or 0) end
+    if menuFrame.chkSound      then menuFrame.chkSound:SetChecked(    not soundMuted      and 1 or 0) end
     if menuFrame.chkTradeskill then menuFrame.chkTradeskill:SetChecked(not tradeskillMuted and 1 or 0) end
     if menuFrame.chkInventory  then menuFrame.chkInventory:SetChecked( inventoryAlerts     and 1 or 0) end
+    if menuFrame.chkOnlyOwned  then menuFrame.chkOnlyOwned:SetChecked( onlyOwnedWTB        and 1 or 0) end
     if menuFrame:IsVisible() then
         menuFrame:Hide()
     else
