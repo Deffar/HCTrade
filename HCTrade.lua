@@ -396,7 +396,7 @@ local PROFESSION_ITEMS = {
     ["alchemy"] = {"potion", "elixir", "flask", "transmute"},
     ["enchanting"] = {"enchant", "enchanting"},
     ["herbalism"] = {"herb", "flower", "leaf", "bloom", "root", "weed"},
-    ["mining"] = {"ore", "mining", "bar"},
+    ["mining"] = {"ore", "mining", "bar", "stones", "stone", "gem", "gems"},
     ["skinning"] = {"leather", "hide", "skinning knife", "pelt", "fur"},
     ["fishing"] = {"fish", "fishing"},
     ["cooking"] = {"food", "cooking", "food buff"},
@@ -931,16 +931,18 @@ local function RecolourItems(plainText, rawMsg)
         end
     end
 
-    -- Recolour WTS and WTB (match at start or after space/newline)
-    result = string.gsub(result, "^WTS%s", WTS_COLOUR .. "WTS" .. RESET_CODE .. " ")
-    result = string.gsub(result, "^WTB%s", WTB_COLOUR .. "WTB" .. RESET_CODE .. " ")
-    result = string.gsub(result, "^WTT%s", WTB_COLOUR .. "WTT" .. RESET_CODE .. " ")
-    result = string.gsub(result, "%sWTS%s", " " .. WTS_COLOUR .. "WTS" .. RESET_CODE .. " ")
-    result = string.gsub(result, "%sWTB%s", " " .. WTB_COLOUR .. "WTB" .. RESET_CODE .. " ")
-    result = string.gsub(result, "%sWTT%s", " " .. WTB_COLOUR .. "WTT" .. RESET_CODE .. " ")
-    result = string.gsub(result, "\nWTS%s", "\n" .. WTS_COLOUR .. "WTS" .. RESET_CODE .. " ")
-    result = string.gsub(result, "\nWTB%s", "\n" .. WTB_COLOUR .. "WTB" .. RESET_CODE .. " ")
-    result = string.gsub(result, "\nWTT%s", "\n" .. WTB_COLOUR .. "WTT" .. RESET_CODE .. " ")
+    -- Recolour WTS, WTB, and WTT (case-insensitive, preserves original casing)
+    result = string.gsub(result, "^([Ww][Tt][Ss])%s",   WTS_COLOUR .. "%1" .. RESET_CODE .. " ")
+    result = string.gsub(result, "%s([Ww][Tt][Ss])%s", " " .. WTS_COLOUR .. "%1" .. RESET_CODE .. " ")
+    result = string.gsub(result, "\n([Ww][Tt][Ss])%s", "\n" .. WTS_COLOUR .. "%1" .. RESET_CODE .. " ")
+
+    result = string.gsub(result, "^([Ww][Tt][Bb])%s",   WTB_COLOUR .. "%1" .. RESET_CODE .. " ")
+    result = string.gsub(result, "%s([Ww][Tt][Bb])%s", " " .. WTB_COLOUR .. "%1" .. RESET_CODE .. " ")
+    result = string.gsub(result, "\n([Ww][Tt][Bb])%s", "\n" .. WTB_COLOUR .. "%1" .. RESET_CODE .. " ")
+
+    result = string.gsub(result, "^([Ww][Tt][Tt])%s",   WTB_COLOUR .. "%1" .. RESET_CODE .. " ")
+    result = string.gsub(result, "%s([Ww][Tt][Tt])%s", " " .. WTB_COLOUR .. "%1" .. RESET_CODE .. " ")
+    result = string.gsub(result, "\n([Ww][Tt][Tt])%s", "\n" .. WTB_COLOUR .. "%1" .. RESET_CODE .. " ")
 
     return result
 end
@@ -1187,10 +1189,6 @@ local function DoHook(frame, label)
         origAddMessage(self, text, r, g, b, id)
         if not text then return end
 
-        if sniffMode then
-            DEFAULT_CHAT_FRAME:AddMessage("|cffffd100[HCTrade sniff - RAW]|r " .. text)
-        end
-
         -- Strip for parsing (plain text only)
         local plain = text
         plain = string.gsub(plain, "|H.-|h(.-)%|h", "%1")
@@ -1200,37 +1198,40 @@ local function DoHook(frame, label)
         plain = string.gsub(plain, "|[^|]", "")
 
         if sniffMode then
-            DEFAULT_CHAT_FRAME:AddMessage("|cffffd100[HCTrade sniff - PLAIN]|r " .. plain)
+            DEFAULT_CHAT_FRAME:AddMessage("|cffffd100[HCTrade sniff]|r " .. plain)
         end
 
-        -- Extract sender and plain message body for parsing
-        -- Support both <sender> and [sender] formats
-        local rawSender, msg = string.match(plain, "<(.-)>%s*(.*)")
+        -- Channel filter: only process Hardcore channel messages
+        if not (string.find(plain, "%[Hardcore%]") or string.find(plain, "^%[H%]") or string.find(plain, "%s%[H%]")) then
+            return
+        end
+
+        -- Extract sender and message body
+        -- Try [Hardcore] [sender]: format
+        local rawSender, msg = string.match(plain, "%[Hardcore%]%s*%[(.-)%]:%s*(.*)")
         if not rawSender then
-            -- Try [HC] [sender] format
-            rawSender, msg = string.match(plain, "%[HC%]%s*%[(.-)%]%s*(.*)")
+            -- Try [H] [sender]: format
+            rawSender, msg = string.match(plain, "%[H%]%s*%[(.-)%]:%s*(.*)")
+        end
+        if not rawSender then
+            -- Fallback: <sender> format
+            rawSender, msg = string.match(plain, "<(.-)>%s*(.*)")
         end
         if not rawSender or not msg or msg == "" then return end
 
         local sender = string.match(rawSender, "^%d+:(.+)") or rawSender
 
-        msg = string.gsub(msg, "^%%[HC%%]%s*", "")
-        if msg == "" then return end
-
         -- Extract rawMsg from original text (preserves colour codes and item links)
-        -- Strip only the timestamp prefix and the sender angle-bracket block,
-        -- leaving the message body fully intact with all |c codes and |H links.
-        local rawMsg = string.match(text, "<.->%s*(.*)")
-        if rawMsg then
-            -- Remove leading [HC] channel tag if present (plain brackets, no codes)
-            rawMsg = string.gsub(rawMsg, "^%[HC%]%s*", "")
+        local rawMsg = text
+        -- Try to strip everything up through "[sender]:" or "<sender>"
+        local stripped = string.match(rawMsg, "%[Hardcore%].-%[.-%]:%s*(.*)")
+        if not stripped then
+            stripped = string.match(rawMsg, "%[H%].-%[.-%]:%s*(.*)")
         end
-        rawMsg = rawMsg or msg
-
-        if debugMode then
-            DEFAULT_CHAT_FRAME:AddMessage("|cffaaaaaa[Hook Debug] Original text param: " .. text .. "|r")
-            DEFAULT_CHAT_FRAME:AddMessage("|cffaaaaaa[Hook Debug] Extracted rawMsg: " .. rawMsg .. "|r")
+        if not stripped then
+            stripped = string.match(rawMsg, "<.->%s*(.*)")
         end
+        rawMsg = stripped or msg
 
         ProcessHCMessage(sender, msg, rawMsg)
     end
