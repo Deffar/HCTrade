@@ -62,6 +62,8 @@ HCTradeDB = HCTradeDB or {}
 
 local TRADE_RANGE    = 5  -- Level range tolerance (±5 levels)
 local notificationsEnabled = true  -- Master on/off switch (does not affect /hct test)
+local hardcoreEnabled = true  -- HC channel monitoring on/off
+local guildEnabled    = true  -- Guild channel monitoring on/off
 local debugMode      = false   -- Print debug messages
 local sniffMode      = false   -- Print all raw HC chat messages
 local hookedFrame    = nil     -- The chat frame we're monitoring
@@ -642,7 +644,41 @@ local ANCHOR_Y    = -180
 local anchorFrame = nil  -- forward declaration so Restack can reference it
 local soundMuted  = false
 
+-- ESC-to-dismiss catcher frame: an invisible frame registered in
+-- UISpecialFrames so that pressing ESC while popups are visible clears
+-- the entire popup stack. Shown whenever activeStack is non-empty,
+-- hidden whenever it becomes empty. ESC fires the OnHide handler which
+-- dismisses every active popup at once.
+local escCatcher = CreateFrame("Frame", "HCTradePopupEscCatcher", UIParent)
+escCatcher:SetWidth(1) escCatcher:SetHeight(1)
+escCatcher:SetPoint("TOPLEFT", UIParent, "TOPLEFT", -10, 10)  -- off-screen
+escCatcher:Hide()
+tinsert(UISpecialFrames, "HCTradePopupEscCatcher")
+local escCatcherSuppress = false  -- prevents recursion when we hide it ourselves
+escCatcher:SetScript("OnHide", function()
+    if escCatcherSuppress then return end
+    -- ESC was pressed (or some other code hid us): clear all popups
+    for i = table.getn(activeStack), 1, -1 do
+        local f = activeStack[i]
+        table.remove(activeStack, i)
+        f:Hide()
+    end
+end)
+
 local function Restack()
+    -- Show/hide the ESC catcher based on whether any popups are visible
+    if table.getn(activeStack) > 0 then
+        if not escCatcher:IsVisible() then
+            escCatcher:Show()
+        end
+    else
+        if escCatcher:IsVisible() then
+            escCatcherSuppress = true
+            escCatcher:Hide()
+            escCatcherSuppress = false
+        end
+    end
+
     if anchorFrame and anchorFrame:IsVisible() then
         -- Anchor popups relative to the anchor frame itself — no coordinate conversion
         local y = 0
@@ -1268,7 +1304,7 @@ local function ProcessHCMessage(sender, msg, rawMsg)
                         locationText = " (Bank)"
                     end
                     -- Green-gold border for "You have this!" alerts with custom Inventory sound
-                    ShowPopup(sender, msg, rawMsg or msg, rangeMin, rangeMax, "HCTrade - You have this!" .. locationText, {r=0.4, g=0.8, b=0.2}, "Interface\\AddOns\\HCTrade\\Sound\\Inventory.ogg")
+                    ShowPopup(sender, msg, rawMsg or msg, rangeMin, rangeMax, "HCTrade - " .. locationText, {r=0.4, g=0.8, b=0.2}, "Interface\\AddOns\\HCTrade\\Sound\\Inventory.ogg")
                     return
                 end
             end
@@ -1348,6 +1384,9 @@ local function DoHook(frame, label)
         if sniffMode then
             DEFAULT_CHAT_FRAME:AddMessage("|cffffd100[HCTrade sniff]|r " .. plain)
         end
+
+        -- Master + HC sub-toggle gate
+        if not (notificationsEnabled and hardcoreEnabled) then return end
 
         -- Channel filter: only process Hardcore channel messages
         if not (string.find(plain, "%[Hardcore%]") or string.find(plain, "^%[HC%]") or string.find(plain, "%s%[HC%]")) then
@@ -1430,6 +1469,7 @@ eventFrame:RegisterEvent("PARTY_MEMBERS_CHANGED")
 eventFrame:RegisterEvent("PLAYER_TARGET_CHANGED")
 eventFrame:RegisterEvent("UPDATE_MOUSEOVER_UNIT")
 eventFrame:RegisterEvent("WHO_LIST_UPDATE")
+eventFrame:RegisterEvent("CHAT_MSG_GUILD")
 eventFrame:SetScript("OnEvent", function()
     if event == "VARIABLES_LOADED" then
         -- Load all saved settings from HCTradeDB (SavedVariables)
@@ -1437,6 +1477,8 @@ eventFrame:SetScript("OnEvent", function()
         if HCTradeDB.anchorY     then ANCHOR_Y       = HCTradeDB.anchorY     end
         if HCTradeDB.soundMuted  ~= nil then soundMuted      = HCTradeDB.soundMuted  end
         if HCTradeDB.notificationsEnabled ~= nil then notificationsEnabled = HCTradeDB.notificationsEnabled end
+        if HCTradeDB.hardcoreEnabled      ~= nil then hardcoreEnabled      = HCTradeDB.hardcoreEnabled      end
+        if HCTradeDB.guildEnabled         ~= nil then guildEnabled         = HCTradeDB.guildEnabled         end
         if HCTradeDB.tradeskillMuted ~= nil then tradeskillMuted = HCTradeDB.tradeskillMuted end
         if HCTradeDB.inventoryAlerts ~= nil then inventoryAlerts = HCTradeDB.inventoryAlerts end
         if HCTradeDB.onlyOwnedWTB ~= nil then onlyOwnedWTB = HCTradeDB.onlyOwnedWTB end
@@ -1533,6 +1575,12 @@ eventFrame:SetScript("OnEvent", function()
     end
     if event == "WHO_LIST_UPDATE" then
         ScanWhoLevels()
+    end
+    if event == "CHAT_MSG_GUILD" then
+        -- arg1 = message body, arg2 = sender name (no [G]/<lvl:name> prefix on raw event)
+        if notificationsEnabled and guildEnabled and arg1 and arg2 then
+            ProcessHCMessage(arg2, arg1, arg1)
+        end
     end
 end)
 
@@ -1650,7 +1698,7 @@ local function CreateMenuFrame()
 
     menuFrame = CreateFrame("Frame", "HCTradeMenu", UIParent)
     menuFrame:SetWidth(260)
-    menuFrame:SetHeight(317)  -- Increased from 281 to accommodate "Only WTB items you own" checkbox
+    menuFrame:SetHeight(353)
     menuFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
     menuFrame:SetFrameStrata("DIALOG")
     menuFrame:SetMovable(true)
@@ -1835,6 +1883,7 @@ local function CreateMenuFrame()
             chk:SetBackdropBorderColor(0.2, 0.2, 0.2, 1)
         end)
 
+        chk.labelBtn = labelBtn
         return chk
     end
 
@@ -1872,38 +1921,79 @@ local function CreateMenuFrame()
     end)
 
     -- Row 2+3+4+5: Sound and filter checkboxes
+     -- Helper to gray out/restore a checkbox label based on master state
+    local function UpdateMasterGating()
+    local function setGrayed(chk, grayed)
+            if not chk then return end
+            local lbl = getglobal(chk:GetName() .. "Text")
+            if lbl then
+                if grayed then lbl:SetTextColor(0.4, 0.4, 0.4)
+                else           lbl:SetTextColor(1.0, 0.82, 0) end
+            end
+            if grayed then
+                chk:EnableMouse(false)
+                if chk.labelBtn then chk.labelBtn:EnableMouse(false) end
+                chk:SetBackdropColor(0.1, 0.1, 0.1, 1)
+                chk:SetBackdropBorderColor(0.15, 0.15, 0.15, 1)
+                local checkTex = chk:GetCheckedTexture()
+                if checkTex then checkTex:SetTexture(0.4, 0.4, 0.4, 0.5) end
+            else
+                chk:EnableMouse(true)
+                if chk.labelBtn then chk.labelBtn:EnableMouse(true) end
+                chk:SetBackdropColor(0, 0, 0, 1)
+                chk:SetBackdropBorderColor(0.2, 0.2, 0.2, 1)
+                local checkTex = chk:GetCheckedTexture()
+                if checkTex then checkTex:SetTexture(1, 0.82, 0, 0.8) end
+            end
+        end
+        local grayed = not notificationsEnabled
+        setGrayed(menuFrame.chkHardcore, grayed)
+        setGrayed(menuFrame.chkGuild,    grayed)
+    end
+    menuFrame.UpdateMasterGating = UpdateMasterGating
+
     menuFrame.chkSound = MakeCheckbox("WTS sound", -58, not soundMuted, function(checked)
         soundMuted = not checked
         HCTradeDB.soundMuted = soundMuted
     end)
-    menuFrame.chkTradeskill = MakeCheckbox("Profession sound", -76, not tradeskillMuted, function(checked)
-        tradeskillMuted = not checked
-        HCTradeDB.tradeskillMuted = tradeskillMuted
-    end)
-    menuFrame.chkInventory = MakeCheckbox("WTB/WTT sound", -94, inventoryAlerts, function(checked)
+    menuFrame.chkInventory = MakeCheckbox("WTB/WTT sound", -76, inventoryAlerts, function(checked)
         inventoryAlerts = checked
         HCTradeDB.inventoryAlerts = inventoryAlerts
         if inventoryAlerts then
             ScanInventory()
         end
     end)
+    menuFrame.chkTradeskill = MakeCheckbox("Profession sound", -94, not tradeskillMuted, function(checked)
+        tradeskillMuted = not checked
+        HCTradeDB.tradeskillMuted = tradeskillMuted
+    end)
     menuFrame.chkOnlyOwned = MakeCheckbox("Only show WTB/WTT items you own", -112, onlyOwnedWTB, function(checked)
         onlyOwnedWTB = checked
         HCTradeDB.onlyOwnedWTB = onlyOwnedWTB
     end)
-    menuFrame.chkEnabled = MakeCheckbox("Notifications enabled", -130, notificationsEnabled, function(checked)
+    menuFrame.chkEnabled = MakeCheckbox("Notifications", -130, notificationsEnabled, function(checked)
         notificationsEnabled = checked
         HCTradeDB.notificationsEnabled = notificationsEnabled
         local state = notificationsEnabled and "|cff00cc00ENABLED|r" or "|cffff4444DISABLED|r"
         DEFAULT_CHAT_FRAME:AddMessage("|cffffd100HCTrade:|r Notifications " .. state)
+        UpdateMasterGating()
     end)
+    menuFrame.chkHardcore = MakeCheckbox("Hardcore Notifications", -148, hardcoreEnabled, function(checked)
+        hardcoreEnabled = checked
+        HCTradeDB.hardcoreEnabled = hardcoreEnabled
+    end)
+    menuFrame.chkGuild = MakeCheckbox("Guild Notifications", -166, guildEnabled, function(checked)
+        guildEnabled = checked
+        HCTradeDB.guildEnabled = guildEnabled
+    end)
+    UpdateMasterGating()
 
     -- Row 6: Test Notification (left half) and Popup Hold Time Slider (right half)
-    MakeHalfBtn("Test Notification", PAD, -158, function() SlashCmdList["HCT"]("test") end)
+    MakeHalfBtn("Test Notification", PAD, -194, function() SlashCmdList["HCT"]("test") end)
 
     -- Popup Hold Time Slider (right side, centered vertically with button)
     local sliderX = PAD + HALF_W + 4
-    local sliderY = -162  -- Center vertically with 22px button height (adjusted for new checkbox)
+    local sliderY = -198  -- Center vertically with 22px button height (adjusted for new checkbox)
 
     local holdSlider = CreateFrame("Slider", "HCTradeHoldSlider", menuFrame)
     holdSlider:SetOrientation("HORIZONTAL")
@@ -1944,13 +2034,13 @@ local function CreateMenuFrame()
     -- Divider 1
     local div1 = menuFrame:CreateTexture(nil, "ARTWORK")
     div1:SetHeight(1)
-    div1:SetPoint("TOPLEFT",  menuFrame, "TOPLEFT",  PAD, -190)
-    div1:SetPoint("TOPRIGHT", menuFrame, "TOPRIGHT", -PAD, -190)
+    div1:SetPoint("TOPLEFT",  menuFrame, "TOPLEFT",  PAD, -226)
+    div1:SetPoint("TOPRIGHT", menuFrame, "TOPRIGHT", -PAD, -226)
     div1:SetTexture(0.3, 0.3, 0.3, 1)
 
     -- Custom Keywords title
     local kwTitle = menuFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    kwTitle:SetPoint("TOPLEFT", menuFrame, "TOPLEFT", PAD, -197)
+    kwTitle:SetPoint("TOPLEFT", menuFrame, "TOPLEFT", PAD, -233)
     kwTitle:SetText("Custom Keywords  |cffaaaaaa(|r|cffffffff/hct |r|cff00ffffls|r|cffaaaaaa)|r")
     kwTitle:SetTextColor(1.0, 0.82, 0)
 
@@ -1958,7 +2048,7 @@ local function CreateMenuFrame()
     local kwInput = CreateFrame("EditBox", "HCTradeKWInput", menuFrame)
     kwInput:SetFontObject(GameFontHighlightSmall)
     kwInput:SetWidth(HALF_W) kwInput:SetHeight(18)
-    kwInput:SetPoint("TOPLEFT", menuFrame, "TOPLEFT", PAD, -214)
+    kwInput:SetPoint("TOPLEFT", menuFrame, "TOPLEFT", PAD, -250)
     kwInput:SetAutoFocus(false)
     kwInput:SetMaxLetters(30)
     kwInput:SetBackdrop({
@@ -2065,20 +2155,20 @@ local function CreateMenuFrame()
     end)
 
     -- List button (right side, same row as add)
-    MakeHalfBtn("Print List", PAD + HALF_W + 4, -242, function()
+    MakeHalfBtn("Print List", PAD + HALF_W + 4, -278, function()
         SlashCmdList["HCT"]("ls")
     end)
 
     -- Divider 2
     local div2 = menuFrame:CreateTexture(nil, "ARTWORK")
     div2:SetHeight(1)
-    div2:SetPoint("TOPLEFT",  menuFrame, "TOPLEFT",  PAD, -274)
-    div2:SetPoint("TOPRIGHT", menuFrame, "TOPRIGHT", -PAD, -274)
+    div2:SetPoint("TOPLEFT",  menuFrame, "TOPLEFT",  PAD, -310)
+    div2:SetPoint("TOPRIGHT", menuFrame, "TOPRIGHT", -PAD, -310)
     div2:SetTexture(0.3, 0.3, 0.3, 1)
 
     -- Help | Close
-    MakeHalfBtn("Help",  PAD,               -281, function() SlashCmdList["HCT"]("help") end)
-    MakeHalfBtn("Close", PAD + HALF_W + 4,  -281, function() menuFrame:Hide() end)
+    MakeHalfBtn("Help",  PAD,               -317, function() SlashCmdList["HCT"]("help") end)
+    MakeHalfBtn("Close", PAD + HALF_W + 4,  -317, function() menuFrame:Hide() end)
 
     menuFrame:Hide()
 end
@@ -2103,6 +2193,9 @@ local function ToggleMenu()
     if menuFrame.chkInventory  then menuFrame.chkInventory:SetChecked( inventoryAlerts     and 1 or 0) end
     if menuFrame.chkEnabled    then menuFrame.chkEnabled:SetChecked(   notificationsEnabled and 1 or 0) end
     if menuFrame.chkOnlyOwned  then menuFrame.chkOnlyOwned:SetChecked( onlyOwnedWTB        and 1 or 0) end
+    if menuFrame.chkHardcore   then menuFrame.chkHardcore:SetChecked(  hardcoreEnabled     and 1 or 0) end
+    if menuFrame.chkGuild      then menuFrame.chkGuild:SetChecked(     guildEnabled        and 1 or 0) end
+    if menuFrame.UpdateMasterGating then menuFrame.UpdateMasterGating() end
     if menuFrame:IsVisible() then
         menuFrame:Hide()
     else
