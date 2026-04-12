@@ -199,7 +199,7 @@ end
 -- Check if message contains WTS or WTB
 local function IsTradeMessage(msg)
     local s = string.lower(msg)
-    return string.find(s, "wts") or string.find(s, "wtb")
+    return string.find(s, "wts") or string.find(s, "wtb") or string.find(s, "wtt")
 end
 
 -- Check if player's level is within the specified range
@@ -933,10 +933,13 @@ local function RecolourItems(plainText, rawMsg)
     -- Recolour WTS and WTB (match at start or after space/newline)
     result = string.gsub(result, "^WTS%s", WTS_COLOUR .. "WTS" .. RESET_CODE .. " ")
     result = string.gsub(result, "^WTB%s", WTB_COLOUR .. "WTB" .. RESET_CODE .. " ")
+    result = string.gsub(result, "^WTT%s", WTB_COLOUR .. "WTT" .. RESET_CODE .. " ")
     result = string.gsub(result, "%sWTS%s", " " .. WTS_COLOUR .. "WTS" .. RESET_CODE .. " ")
     result = string.gsub(result, "%sWTB%s", " " .. WTB_COLOUR .. "WTB" .. RESET_CODE .. " ")
+    result = string.gsub(result, "%sWTT%s", " " .. WTB_COLOUR .. "WTT" .. RESET_CODE .. " ")
     result = string.gsub(result, "\nWTS%s", "\n" .. WTS_COLOUR .. "WTS" .. RESET_CODE .. " ")
     result = string.gsub(result, "\nWTB%s", "\n" .. WTB_COLOUR .. "WTB" .. RESET_CODE .. " ")
+    result = string.gsub(result, "\nWTT%s", "\n" .. WTB_COLOUR .. "WTT" .. RESET_CODE .. " ")
 
     return result
 end
@@ -1093,7 +1096,7 @@ local function ProcessHCMessage(sender, msg, rawMsg)
         if debugMode then
             DEFAULT_CHAT_FRAME:AddMessage("|cffff9900[HCTrade] Checking inventory (enabled: " .. tostring(inventoryAlerts) .. ")...|r")
         end
-        if string.find(string.lower(msg), "wtb") then
+        if string.find(string.lower(msg), "wtb") or string.find(string.lower(msg), "wtt") then
             -- Extract item names from message
             for itemName in string.gmatch(msg, "%[(.-)%]") do
                 if debugMode then
@@ -1109,9 +1112,9 @@ local function ProcessHCMessage(sender, msg, rawMsg)
                     if location.inBags and location.inBank then
                         locationText = " (Bags + Bank)"
                     elseif location.inBags then
-                        locationText = " (In Bags)"
+                        locationText = " (Bags)"
                     elseif location.inBank then
-                        locationText = " (In Bank)"
+                        locationText = " (Bank)"
                     end
                     -- Green-gold border for "You have this!" alerts with custom Inventory sound
                     ShowPopup(sender, msg, rawMsg or msg, rangeMin, rangeMax, "HCTrade - You have this!" .. locationText, {r=0.4, g=0.8, b=0.2}, "Interface\\AddOns\\HCTrade\\Sound\\Inventory.ogg")
