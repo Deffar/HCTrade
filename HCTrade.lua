@@ -71,12 +71,17 @@ local inventoryAlerts = false  -- Enable special alerts for WTB items you own
 local onlyOwnedWTB   = false   -- Filter: only show WTB if you own at least one item
 
 -- Inventory tracking for "You have this!" alerts
-local playerInventory = {}      -- { ["Item Name"] = {inBags=true, inBank=false}, ... }
-local lastInventoryScan = 0     -- Timestamp of last inventory scan
-local INVENTORY_SCAN_COOLDOWN = 1.0  -- Seconds between scans (prevents spam)
+local playerInventory = {}      -- { ["Item Name"] = true, ... }
+local lastInventoryScan = 0     -- timestamp of last scan
+local pendingInventoryScan = false  -- deferred scan flag
+local INVENTORY_SCAN_COOLDOWN = 1.0  -- seconds between scans
 local bankCache = {}            -- Cached bank items (persists when bank is closed)
 local bankOpen = false          -- Whether bank window is currently open
 local itemColorCache = {}       -- Cached item quality colors: { ["Item Name"] = "|cffXXXXXX", ... }
+
+-- Level cache for senders without explicit level in their message
+-- HCTradeDB.levelCache = { ["PlayerName"] = level, ... }
+local LEVEL_CACHE_RANGE = 5  -- +/- range applied when using cached level
 
 -- ================================================================
 -- ITEM QUALITY & CUSTOM KEYWORDS
@@ -218,11 +223,16 @@ end
 
 local function ScanInventory()
     -- Throttle scanning to prevent spam (max once per second)
+    -- If called during cooldown, set pending flag so the OnUpdate ticker
+    -- runs a final scan once the cooldown expires (handles bag-sort addons
+    -- that fire many BAG_UPDATE events in quick succession)
     local now = GetTime()
     if now - lastInventoryScan < INVENTORY_SCAN_COOLDOWN then
+        pendingInventoryScan = true
         return
     end
     lastInventoryScan = now
+    pendingInventoryScan = false
     
     playerInventory = {}  -- Reset cache
     
@@ -373,6 +383,76 @@ local function ScanProfessions()
                 end
             end
         end
+    end
+end
+
+-- ================================================================
+-- LEVEL CACHE (passive)
+-- Records player levels we observe via friends list, guild roster,
+-- party, raid, target, mouseover, and /who results. Used as a fallback
+-- when a WTS/WTB message has no explicit level range. Persisted in
+-- HCTradeDB.levelCache across sessions. No network traffic generated.
+-- ================================================================
+
+local function CacheLevel(name, level)
+    if not name or not level or level == 0 then return end
+    HCTradeDB.levelCache = HCTradeDB.levelCache or {}
+    local cached = HCTradeDB.levelCache[name]
+    -- Only overwrite if new level is higher (handles seeing someone level up)
+    if not cached or level > cached then
+        HCTradeDB.levelCache[name] = level
+    end
+end
+
+local function GetCachedLevel(name)
+    if not HCTradeDB.levelCache then return nil end
+    return HCTradeDB.levelCache[name]
+end
+
+local function ScanFriendsLevels()
+    for i = 1, GetNumFriends() do
+        local name, level = GetFriendInfo(i)
+        CacheLevel(name, level)
+    end
+end
+
+local function ScanGuildLevels()
+    if not IsInGuild() then return end
+    for i = 1, GetNumGuildMembers() do
+        local name, _, _, level = GetGuildRosterInfo(i)
+        CacheLevel(name, level)
+    end
+end
+
+local function ScanRaidLevels()
+    for i = 1, GetNumRaidMembers() do
+        local name, _, _, level = GetRaidRosterInfo(i)
+        CacheLevel(name, level)
+    end
+end
+
+local function ScanPartyLevels()
+    for i = 1, GetNumPartyMembers() do
+        CacheLevel(UnitName("party"..i), UnitLevel("party"..i))
+    end
+end
+
+local function ScanTargetLevel()
+    if UnitIsPlayer("target") then
+        CacheLevel(UnitName("target"), UnitLevel("target"))
+    end
+end
+
+local function ScanMouseoverLevel()
+    if UnitIsPlayer("mouseover") then
+        CacheLevel(UnitName("mouseover"), UnitLevel("mouseover"))
+    end
+end
+
+local function ScanWhoLevels()
+    for i = 1, GetNumWhoResults() do
+        local name, _, level = GetWhoInfo(i)
+        CacheLevel(name, level)
     end
 end
 
@@ -1051,6 +1131,22 @@ local function ProcessHCMessage(sender, msg, rawMsg)
     local rangeMin, rangeMax = ParseLevelRange(msg)
     local pl = UnitLevel("player")
 
+    -- Fallback: if no level range was found in the message, try to use
+    -- the sender's cached level (gathered passively from friends/guild/
+    -- party/raid/target/mouseover/who results)
+    local usedCachedLevel = false
+    if not rangeMin then
+        local cached = GetCachedLevel(sender)
+        if cached then
+            rangeMin = math.max(1, cached - LEVEL_CACHE_RANGE)
+            rangeMax = math.min(60, cached + LEVEL_CACHE_RANGE)
+            usedCachedLevel = true
+            if debugMode then
+                DEFAULT_CHAT_FRAME:AddMessage("|cffaaaaaa[HCTrade] Using cached level " .. cached .. " for " .. sender .. "|r")
+            end
+        end
+    end
+
     -- Debug output: show what we parsed
     if debugMode then
         local GOLD  = "|cffffd100"
@@ -1202,16 +1298,16 @@ local function DoHook(frame, label)
         end
 
         -- Channel filter: only process Hardcore channel messages
-        if not (string.find(plain, "%[Hardcore%]") or string.find(plain, "^%[H%]") or string.find(plain, "%s%[H%]")) then
+        if not (string.find(plain, "%[Hardcore%]") or string.find(plain, "^%[HC%]") or string.find(plain, "%s%[HC%]")) then
             return
         end
 
         -- Extract sender and message body
         -- Try [Hardcore] [sender]: format
-        local rawSender, msg = string.match(plain, "%[Hardcore%]%s*%[(.-)%]:%s*(.*)")
+        local rawSender, msg = string.match(plain, "%[Hardcore%]%s*%[(.-)%]:?%s*(.*)")
         if not rawSender then
             -- Try [H] [sender]: format
-            rawSender, msg = string.match(plain, "%[H%]%s*%[(.-)%]:%s*(.*)")
+            rawSender, msg = string.match(plain, "%[HC%]%s*%[(.-)%]:?%s*(.*)")
         end
         if not rawSender then
             -- Fallback: <sender> format
@@ -1224,9 +1320,9 @@ local function DoHook(frame, label)
         -- Extract rawMsg from original text (preserves colour codes and item links)
         local rawMsg = text
         -- Try to strip everything up through "[sender]:" or "<sender>"
-        local stripped = string.match(rawMsg, "%[Hardcore%].-%[.-%]:%s*(.*)")
+        local stripped = string.match(rawMsg, "%[Hardcore%].-%[.-%]:?%s*(.*)")
         if not stripped then
-            stripped = string.match(rawMsg, "%[H%].-%[.-%]:%s*(.*)")
+            stripped = string.match(rawMsg, "%[HC%].-%[.-%]:?%s*(.*)")
         end
         if not stripped then
             stripped = string.match(rawMsg, "<.->%s*(.*)")
@@ -1275,6 +1371,13 @@ eventFrame:RegisterEvent("BAG_UPDATE")
 eventFrame:RegisterEvent("BANKFRAME_OPENED")
 eventFrame:RegisterEvent("BANKFRAME_CLOSED")
 eventFrame:RegisterEvent("PLAYERBANKSLOTS_CHANGED")
+eventFrame:RegisterEvent("FRIENDLIST_UPDATE")
+eventFrame:RegisterEvent("GUILD_ROSTER_UPDATE")
+eventFrame:RegisterEvent("RAID_ROSTER_UPDATE")
+eventFrame:RegisterEvent("PARTY_MEMBERS_CHANGED")
+eventFrame:RegisterEvent("PLAYER_TARGET_CHANGED")
+eventFrame:RegisterEvent("UPDATE_MOUSEOVER_UNIT")
+eventFrame:RegisterEvent("WHO_LIST_UPDATE")
 eventFrame:SetScript("OnEvent", function()
     if event == "VARIABLES_LOADED" then
         -- Load all saved settings from HCTradeDB (SavedVariables)
@@ -1303,6 +1406,9 @@ eventFrame:SetScript("OnEvent", function()
         if HCTradeDB.itemColorCache then
             itemColorCache = HCTradeDB.itemColorCache
         end
+
+        -- Initialize level cache (passive sender level tracking)
+        HCTradeDB.levelCache = HCTradeDB.levelCache or {}
         
         ScanProfessions()  -- Detect player's professions
         ScanInventory()    -- Initial inventory scan
@@ -1312,6 +1418,12 @@ eventFrame:SetScript("OnEvent", function()
         -- Rescan on login/reload (professions might have changed)
         ScanProfessions()
         ScanInventory()
+        -- Seed level cache with what we already know
+        CacheLevel(UnitName("player"), UnitLevel("player"))
+        ScanFriendsLevels()
+        ScanGuildLevels()
+        ScanPartyLevels()
+        ScanRaidLevels()
         -- Auto-hook HC chat frame if not already hooked
         if not hookedFrame then
             HookHCFrame()
@@ -1340,6 +1452,41 @@ eventFrame:SetScript("OnEvent", function()
     end
     if event == "PLAYERBANKSLOTS_CHANGED" then
         if bankOpen then
+            ScanInventory()
+        end
+    end
+
+    -- Level cache events (passive, no network traffic)
+    if event == "FRIENDLIST_UPDATE" then
+        ScanFriendsLevels()
+    end
+    if event == "GUILD_ROSTER_UPDATE" then
+        ScanGuildLevels()
+    end
+    if event == "RAID_ROSTER_UPDATE" then
+        ScanRaidLevels()
+    end
+    if event == "PARTY_MEMBERS_CHANGED" then
+        ScanPartyLevels()
+    end
+    if event == "PLAYER_TARGET_CHANGED" then
+        ScanTargetLevel()
+    end
+    if event == "UPDATE_MOUSEOVER_UNIT" then
+        ScanMouseoverLevel()
+    end
+    if event == "WHO_LIST_UPDATE" then
+        ScanWhoLevels()
+    end
+end)
+
+-- Deferred inventory scan ticker: runs a final scan ~1s after a burst
+-- of BAG_UPDATE events (e.g. from a bag-sort addon). Cheap when idle:
+-- a single boolean check per frame.
+eventFrame:SetScript("OnUpdate", function()
+    if pendingInventoryScan then
+        local now = GetTime()
+        if now - lastInventoryScan >= INVENTORY_SCAN_COOLDOWN then
             ScanInventory()
         end
     end
@@ -2036,13 +2183,25 @@ SlashCmdList["HCT"] = function(msg)
         end
         DEFAULT_CHAT_FRAME:AddMessage("|cffffd100HCTrade:|r Test: 3 trade popups + " .. profCount .. " profession popup(s) for level " .. pl .. ".")
 
+    elseif cmd == "cache" then
+        local count = 0
+        if HCTradeDB.levelCache then
+            for _ in pairs(HCTradeDB.levelCache) do count = count + 1 end
+        end
+        DEFAULT_CHAT_FRAME:AddMessage("|cffffd100HCTrade:|r Level cache: |cffffffff" .. count .. "|r player(s) tracked.")
+        DEFAULT_CHAT_FRAME:AddMessage("|cffaaaaaa(use |cffffffff/hct cache clear|r|cffaaaaaa to wipe)")
+
+    elseif cmd == "cache clear" then
+        HCTradeDB.levelCache = {}
+        DEFAULT_CHAT_FRAME:AddMessage("|cffffd100HCTrade:|r Level cache cleared.")
+
     elseif cmd == "help" or cmd == "" then
         DEFAULT_CHAT_FRAME:AddMessage("|cffffd100HCTrade:|r To get help, type |cffffffff/hct help |cff00ffff<command>|r for details.")
         DEFAULT_CHAT_FRAME:AddMessage("|cffffd100HCTrade:|r Example: |cffffffff/hct help |cff00ffffstatus|r")
         DEFAULT_CHAT_FRAME:AddMessage("|cffffd100HCTrade:|r List of commands:")
         DEFAULT_CHAT_FRAME:AddMessage("  |cffffffff/hct |cff00ffffmenu|r   |cffffffff/hct |cff00fffftest|r    |cffffffff/hct |cff00ffffunlock|r  |cffffffff/hct |cff00fffflock|r")
         DEFAULT_CHAT_FRAME:AddMessage("  |cffffffff/hct |cff00ffffdebug|r  |cffffffff/hct |cff00ffffsniff|r   |cffffffff/hct |cff00ffffstatus|r  |cffffffff/hct |cff00ffffhook N|r")
-        DEFAULT_CHAT_FRAME:AddMessage("  |cffffffff/hct |cff00ffffls|r     |cffffffff/hct |cff00ffffrm N|r")
+        DEFAULT_CHAT_FRAME:AddMessage("  |cffffffff/hct |cff00ffffls|r     |cffffffff/hct |cff00ffffrm N|r  |cffffffff/hct |cff00ffffcache|r")
 
     elseif string.sub(cmd, 1, 5) == "help " then
         local topic = string.gsub(cmd, "^help%s+", "")
@@ -2082,6 +2241,12 @@ SlashCmdList["HCT"] = function(msg)
             DEFAULT_CHAT_FRAME:AddMessage(G .. "rm N|r - Removes custom keyword number N.")
             DEFAULT_CHAT_FRAME:AddMessage("  Run /hct ls first to see the list and find the number.")
             DEFAULT_CHAT_FRAME:AddMessage("  Example: /hct rm 3 removes the third keyword in your list.")
+        elseif topic == "cache" then
+            DEFAULT_CHAT_FRAME:AddMessage(G .. "cache|r - Shows how many players are in the level cache.")
+            DEFAULT_CHAT_FRAME:AddMessage("  HCTrade passively records levels from friends, guild, party,")
+            DEFAULT_CHAT_FRAME:AddMessage("  raid, target, mouseover, and /who results. These are used as")
+            DEFAULT_CHAT_FRAME:AddMessage("  a fallback when a WTS/WTB has no level in the message.")
+            DEFAULT_CHAT_FRAME:AddMessage("  Use |cffffffff/hct cache clear|r to wipe the cache.")
         else
             DEFAULT_CHAT_FRAME:AddMessage("|cffff4444HCTrade:|r Unknown command '" .. topic .. "'. Type /hct help for a list.")
         end
