@@ -20,7 +20,7 @@
 * **Adjustable Layout**: Move and lock the notification area anywhere on your screen using a dedicated anchor.
 * **Sound Alerts**: Separate sounds for trade notifications, profession requests, and inventory matches (can be muted independently).
 
-  <img width="439" height="507" alt="image" src="https://github.com/user-attachments/assets/0ac285fb-1dc9-49da-bc45-424bba2429b7" />
+  <img width="440" height="541" alt="image" src="https://github.com/user-attachments/assets/a68ea854-dea0-4f46-b742-871801287f47" />
   <img width="416" height="209" alt="image" src="https://github.com/user-attachments/assets/bea21427-5d61-4db3-8b13-3202782f372c" />
   <img width="273" height="161" alt="image" src="https://github.com/user-attachments/assets/bb668588-86cb-48b5-bbf7-970d7fc05163" />
   <img width="271" height="137" alt="image" src="https://github.com/user-attachments/assets/4a27d623-6d76-4a3c-beea-445c8c1a84fa" />
