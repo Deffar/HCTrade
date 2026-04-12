@@ -1216,7 +1216,7 @@ local function ProcessHCMessage(sender, msg, rawMsg)
                         locationText = " (Bank)"
                     end
                     -- Green-gold border for "You have this!" alerts with custom Inventory sound
-                    ShowPopup(sender, msg, rawMsg or msg, rangeMin, rangeMax, "HCTrade - You have this!" .. locationText, {r=0.4, g=0.8, b=0.2}, "Interface\\AddOns\\HCTrade\\Sound\\Inventory.ogg")
+                    ShowPopup(sender, msg, rawMsg or msg, rangeMin, rangeMax, "HCTrade - " .. locationText, {r=0.4, g=0.8, b=0.2}, "Interface\\AddOns\\HCTrade\\Sound\\Inventory.ogg")
                     return
                 end
             end
