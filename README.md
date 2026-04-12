@@ -4,6 +4,8 @@
 
 ---
 
+<img width="450" height="605" alt="image" src="https://github.com/user-attachments/assets/86d2beb8-c76f-4813-9a5b-4b08194ac846" />
+
 ## Features
 
 * **Hardcore Chat Filtering**: Scans messages in the Hardcore channel for trade activity.
@@ -24,7 +26,7 @@
 * **Sound Alerts**: Separate sounds for trade notifications (WTS), WTB/WTT inventory matches, and profession requests — each can be muted independently.
 * **Class-Colored Sender Names**: Sender names in popups are colored by class when known (cached from friends list, guild roster, party, raid, target, mouseover, and /who results).
 
-  <img width="450" height="605" alt="image" src="https://github.com/user-attachments/assets/86d2beb8-c76f-4813-9a5b-4b08194ac846" />
+
 
 ---
 
