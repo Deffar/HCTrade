@@ -120,6 +120,7 @@ local PROF_ABBREVS = {
     ["fishing"]        = {"fish","fishing","fisher"},
     ["cooking"]        = {"cook","cooking"},
     ["first aid"]      = {"fa","firstaid","first aid","first-aid"},
+    ["jewelcrafting"]   = {"jc","jewelcrafting","jeweler","jewellery", "jwc", "jewelcrafter", "jewelcraft"},
 }
 
 -- ================================================================
@@ -1667,22 +1668,22 @@ local function CreateMenuFrame()
     end)
 
     -- Row 2+3+4+5: Sound and filter checkboxes
-    menuFrame.chkSound = MakeCheckbox("Trade sound", -58, not soundMuted, function(checked)
+    menuFrame.chkSound = MakeCheckbox("WTS sound", -58, not soundMuted, function(checked)
         soundMuted = not checked
         HCTradeDB.soundMuted = soundMuted
     end)
-    menuFrame.chkTradeskill = MakeCheckbox("Tradeskill sound", -76, not tradeskillMuted, function(checked)
+    menuFrame.chkTradeskill = MakeCheckbox("Profession sound", -76, not tradeskillMuted, function(checked)
         tradeskillMuted = not checked
         HCTradeDB.tradeskillMuted = tradeskillMuted
     end)
-    menuFrame.chkInventory = MakeCheckbox("Owned items sound", -94, inventoryAlerts, function(checked)
+    menuFrame.chkInventory = MakeCheckbox("WTB/WTT sound", -94, inventoryAlerts, function(checked)
         inventoryAlerts = checked
         HCTradeDB.inventoryAlerts = inventoryAlerts
         if inventoryAlerts then
             ScanInventory()
         end
     end)
-    menuFrame.chkOnlyOwned = MakeCheckbox("Only WTB items you own", -112, onlyOwnedWTB, function(checked)
+    menuFrame.chkOnlyOwned = MakeCheckbox("Only show WTB/WTT items you own", -112, onlyOwnedWTB, function(checked)
         onlyOwnedWTB = checked
         HCTradeDB.onlyOwnedWTB = onlyOwnedWTB
     end)
