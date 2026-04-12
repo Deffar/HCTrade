@@ -61,6 +61,7 @@ HCTradeDB = HCTradeDB or {}
 -- ================================================================
 
 local TRADE_RANGE    = 5  -- Level range tolerance (±5 levels)
+local notificationsEnabled = true  -- Master on/off switch (does not affect /hct test)
 local debugMode      = false   -- Print debug messages
 local sniffMode      = false   -- Print all raw HC chat messages
 local hookedFrame    = nil     -- The chat frame we're monitoring
@@ -409,50 +410,92 @@ local function GetCachedLevel(name)
     return HCTradeDB.levelCache[name]
 end
 
+-- Class cache (parallel to level cache)
+-- Stores raw English class token, e.g. "WARRIOR", "PALADIN"
+-- HCTradeDB.classCache = { ["PlayerName"] = "CLASSNAME", ... }
+local CLASS_COLORS = {
+    WARRIOR = "|cffc79c6e",
+    PALADIN = "|cfff58cba",
+    HUNTER  = "|cffabd473",
+    ROGUE   = "|cfffff569",
+    PRIEST  = "|cffffffff",
+    SHAMAN  = "|cff0070de",
+    MAGE    = "|cff69ccf0",
+    WARLOCK = "|cff9482c9",
+    DRUID   = "|cffff7d0a",
+}
+
+local function CacheClass(name, class)
+    if not name or not class or class == "" then return end
+    HCTradeDB.classCache = HCTradeDB.classCache or {}
+    HCTradeDB.classCache[name] = string.upper(class)
+end
+
+local function GetCachedClass(name)
+    if not HCTradeDB.classCache then return nil end
+    return HCTradeDB.classCache[name]
+end
+
+local function GetClassColor(class)
+    if not class then return nil end
+    return CLASS_COLORS[string.upper(class)]
+end
+
 local function ScanFriendsLevels()
     for i = 1, GetNumFriends() do
-        local name, level = GetFriendInfo(i)
+        local name, level, class = GetFriendInfo(i)
         CacheLevel(name, level)
+        CacheClass(name, class)
     end
 end
 
 local function ScanGuildLevels()
     if not IsInGuild() then return end
     for i = 1, GetNumGuildMembers() do
-        local name, _, _, level = GetGuildRosterInfo(i)
+        local name, _, _, level, class = GetGuildRosterInfo(i)
         CacheLevel(name, level)
+        CacheClass(name, class)
     end
 end
 
 local function ScanRaidLevels()
     for i = 1, GetNumRaidMembers() do
-        local name, _, _, level = GetRaidRosterInfo(i)
+        local name, _, _, level, class = GetRaidRosterInfo(i)
         CacheLevel(name, level)
+        CacheClass(name, class)
     end
 end
 
 local function ScanPartyLevels()
     for i = 1, GetNumPartyMembers() do
-        CacheLevel(UnitName("party"..i), UnitLevel("party"..i))
+        local unit = "party"..i
+        CacheLevel(UnitName(unit), UnitLevel(unit))
+        local _, class = UnitClass(unit)
+        CacheClass(UnitName(unit), class)
     end
 end
 
 local function ScanTargetLevel()
     if UnitIsPlayer("target") then
         CacheLevel(UnitName("target"), UnitLevel("target"))
+        local _, class = UnitClass("target")
+        CacheClass(UnitName("target"), class)
     end
 end
 
 local function ScanMouseoverLevel()
     if UnitIsPlayer("mouseover") then
         CacheLevel(UnitName("mouseover"), UnitLevel("mouseover"))
+        local _, class = UnitClass("mouseover")
+        CacheClass(UnitName("mouseover"), class)
     end
 end
 
 local function ScanWhoLevels()
     for i = 1, GetNumWhoResults() do
-        local name, _, level = GetWhoInfo(i)
+        local name, _, level, _, class = GetWhoInfo(i)
         CacheLevel(name, level)
+        CacheClass(name, class)
     end
 end
 
@@ -695,7 +738,7 @@ local function AcquirePopup()
     whisperText:SetPoint("TOPLEFT",     whisperBtn, "TOPLEFT",     0, 0)
     whisperText:SetPoint("BOTTOMRIGHT", whisperBtn, "BOTTOMRIGHT", 0, 0)
     whisperText:SetJustifyH("LEFT")
-    whisperText:SetTextColor(1.0, 0, 1.0)
+    whisperText:SetTextColor(1, 1, 1)
     f.whisperBtn  = whisperBtn
     f.whisperText = whisperText
     whisperBtn:SetScript("OnClick", function()
@@ -1044,7 +1087,14 @@ local function ShowPopup(sender, msg, rawMsg, rangeMin, rangeMax, header, border
 
     f._sender = sender
     f.header:SetText(header or "HCTrade - level match!")
-    f.whisperText:SetText("<" .. sender .. ">  |cffaaaaaa[click to whisper]|r")
+    -- Color the sender name by class if cached, otherwise default magenta
+    local senderColor = "|cffff00ff"  -- default magenta (unknown class)
+    local cachedClass = GetCachedClass(sender)
+    if cachedClass then
+        local classCol = GetClassColor(cachedClass)
+        if classCol then senderColor = classCol end
+    end
+    f.whisperText:SetText(senderColor .. "<" .. sender .. ">|r  |cffaaaaaa[click to whisper]|r")
     
     -- Set custom border color if provided (default gold: 1.0, 0.82, 0)
     if borderColor then
@@ -1125,6 +1175,8 @@ end
 -- Each check returns early if it triggers, so only one popup per message
 
 local function ProcessHCMessage(sender, msg, rawMsg)
+    -- Master switch: skip everything if notifications are disabled
+    if not notificationsEnabled then return end
     -- Ignore non-trade messages
     if not IsTradeMessage(msg) then return end
 
@@ -1216,7 +1268,7 @@ local function ProcessHCMessage(sender, msg, rawMsg)
                         locationText = " (Bank)"
                     end
                     -- Green-gold border for "You have this!" alerts with custom Inventory sound
-                    ShowPopup(sender, msg, rawMsg or msg, rangeMin, rangeMax, "HCTrade - " .. locationText, {r=0.4, g=0.8, b=0.2}, "Interface\\AddOns\\HCTrade\\Sound\\Inventory.ogg")
+                    ShowPopup(sender, msg, rawMsg or msg, rangeMin, rangeMax, "HCTrade - You have this!" .. locationText, {r=0.4, g=0.8, b=0.2}, "Interface\\AddOns\\HCTrade\\Sound\\Inventory.ogg")
                     return
                 end
             end
@@ -1384,6 +1436,7 @@ eventFrame:SetScript("OnEvent", function()
         if HCTradeDB.anchorX     then ANCHOR_X       = HCTradeDB.anchorX     end
         if HCTradeDB.anchorY     then ANCHOR_Y       = HCTradeDB.anchorY     end
         if HCTradeDB.soundMuted  ~= nil then soundMuted      = HCTradeDB.soundMuted  end
+        if HCTradeDB.notificationsEnabled ~= nil then notificationsEnabled = HCTradeDB.notificationsEnabled end
         if HCTradeDB.tradeskillMuted ~= nil then tradeskillMuted = HCTradeDB.tradeskillMuted end
         if HCTradeDB.inventoryAlerts ~= nil then inventoryAlerts = HCTradeDB.inventoryAlerts end
         if HCTradeDB.onlyOwnedWTB ~= nil then onlyOwnedWTB = HCTradeDB.onlyOwnedWTB end
@@ -1409,6 +1462,7 @@ eventFrame:SetScript("OnEvent", function()
 
         -- Initialize level cache (passive sender level tracking)
         HCTradeDB.levelCache = HCTradeDB.levelCache or {}
+        HCTradeDB.classCache = HCTradeDB.classCache or {}
         
         ScanProfessions()  -- Detect player's professions
         ScanInventory()    -- Initial inventory scan
@@ -1420,6 +1474,8 @@ eventFrame:SetScript("OnEvent", function()
         ScanInventory()
         -- Seed level cache with what we already know
         CacheLevel(UnitName("player"), UnitLevel("player"))
+        local _, playerClass = UnitClass("player")
+        CacheClass(UnitName("player"), playerClass)
         ScanFriendsLevels()
         ScanGuildLevels()
         ScanPartyLevels()
@@ -1594,7 +1650,7 @@ local function CreateMenuFrame()
 
     menuFrame = CreateFrame("Frame", "HCTradeMenu", UIParent)
     menuFrame:SetWidth(260)
-    menuFrame:SetHeight(299)  -- Increased from 281 to accommodate "Only WTB items you own" checkbox
+    menuFrame:SetHeight(317)  -- Increased from 281 to accommodate "Only WTB items you own" checkbox
     menuFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
     menuFrame:SetFrameStrata("DIALOG")
     menuFrame:SetMovable(true)
@@ -1835,13 +1891,19 @@ local function CreateMenuFrame()
         onlyOwnedWTB = checked
         HCTradeDB.onlyOwnedWTB = onlyOwnedWTB
     end)
+    menuFrame.chkEnabled = MakeCheckbox("Notifications enabled", -130, notificationsEnabled, function(checked)
+        notificationsEnabled = checked
+        HCTradeDB.notificationsEnabled = notificationsEnabled
+        local state = notificationsEnabled and "|cff00cc00ENABLED|r" or "|cffff4444DISABLED|r"
+        DEFAULT_CHAT_FRAME:AddMessage("|cffffd100HCTrade:|r Notifications " .. state)
+    end)
 
     -- Row 6: Test Notification (left half) and Popup Hold Time Slider (right half)
-    MakeHalfBtn("Test Notification", PAD, -140, function() SlashCmdList["HCT"]("test") end)
+    MakeHalfBtn("Test Notification", PAD, -158, function() SlashCmdList["HCT"]("test") end)
 
     -- Popup Hold Time Slider (right side, centered vertically with button)
     local sliderX = PAD + HALF_W + 4
-    local sliderY = -144  -- Center vertically with 22px button height (adjusted for new checkbox)
+    local sliderY = -162  -- Center vertically with 22px button height (adjusted for new checkbox)
 
     local holdSlider = CreateFrame("Slider", "HCTradeHoldSlider", menuFrame)
     holdSlider:SetOrientation("HORIZONTAL")
@@ -1882,13 +1944,13 @@ local function CreateMenuFrame()
     -- Divider 1
     local div1 = menuFrame:CreateTexture(nil, "ARTWORK")
     div1:SetHeight(1)
-    div1:SetPoint("TOPLEFT",  menuFrame, "TOPLEFT",  PAD, -172)
-    div1:SetPoint("TOPRIGHT", menuFrame, "TOPRIGHT", -PAD, -172)
+    div1:SetPoint("TOPLEFT",  menuFrame, "TOPLEFT",  PAD, -190)
+    div1:SetPoint("TOPRIGHT", menuFrame, "TOPRIGHT", -PAD, -190)
     div1:SetTexture(0.3, 0.3, 0.3, 1)
 
     -- Custom Keywords title
     local kwTitle = menuFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    kwTitle:SetPoint("TOPLEFT", menuFrame, "TOPLEFT", PAD, -179)
+    kwTitle:SetPoint("TOPLEFT", menuFrame, "TOPLEFT", PAD, -197)
     kwTitle:SetText("Custom Keywords  |cffaaaaaa(|r|cffffffff/hct |r|cff00ffffls|r|cffaaaaaa)|r")
     kwTitle:SetTextColor(1.0, 0.82, 0)
 
@@ -1896,7 +1958,7 @@ local function CreateMenuFrame()
     local kwInput = CreateFrame("EditBox", "HCTradeKWInput", menuFrame)
     kwInput:SetFontObject(GameFontHighlightSmall)
     kwInput:SetWidth(HALF_W) kwInput:SetHeight(18)
-    kwInput:SetPoint("TOPLEFT", menuFrame, "TOPLEFT", PAD, -196)
+    kwInput:SetPoint("TOPLEFT", menuFrame, "TOPLEFT", PAD, -214)
     kwInput:SetAutoFocus(false)
     kwInput:SetMaxLetters(30)
     kwInput:SetBackdrop({
@@ -2003,20 +2065,20 @@ local function CreateMenuFrame()
     end)
 
     -- List button (right side, same row as add)
-    MakeHalfBtn("Print List", PAD + HALF_W + 4, -224, function()
+    MakeHalfBtn("Print List", PAD + HALF_W + 4, -242, function()
         SlashCmdList["HCT"]("ls")
     end)
 
     -- Divider 2
     local div2 = menuFrame:CreateTexture(nil, "ARTWORK")
     div2:SetHeight(1)
-    div2:SetPoint("TOPLEFT",  menuFrame, "TOPLEFT",  PAD, -256)
-    div2:SetPoint("TOPRIGHT", menuFrame, "TOPRIGHT", -PAD, -256)
+    div2:SetPoint("TOPLEFT",  menuFrame, "TOPLEFT",  PAD, -274)
+    div2:SetPoint("TOPRIGHT", menuFrame, "TOPRIGHT", -PAD, -274)
     div2:SetTexture(0.3, 0.3, 0.3, 1)
 
     -- Help | Close
-    MakeHalfBtn("Help",  PAD,               -263, function() SlashCmdList["HCT"]("help") end)
-    MakeHalfBtn("Close", PAD + HALF_W + 4,  -263, function() menuFrame:Hide() end)
+    MakeHalfBtn("Help",  PAD,               -281, function() SlashCmdList["HCT"]("help") end)
+    MakeHalfBtn("Close", PAD + HALF_W + 4,  -281, function() menuFrame:Hide() end)
 
     menuFrame:Hide()
 end
@@ -2039,6 +2101,7 @@ local function ToggleMenu()
     if menuFrame.chkSound      then menuFrame.chkSound:SetChecked(    not soundMuted      and 1 or 0) end
     if menuFrame.chkTradeskill then menuFrame.chkTradeskill:SetChecked(not tradeskillMuted and 1 or 0) end
     if menuFrame.chkInventory  then menuFrame.chkInventory:SetChecked( inventoryAlerts     and 1 or 0) end
+    if menuFrame.chkEnabled    then menuFrame.chkEnabled:SetChecked(   notificationsEnabled and 1 or 0) end
     if menuFrame.chkOnlyOwned  then menuFrame.chkOnlyOwned:SetChecked( onlyOwnedWTB        and 1 or 0) end
     if menuFrame:IsVisible() then
         menuFrame:Hide()
@@ -2195,13 +2258,28 @@ SlashCmdList["HCT"] = function(msg)
         HCTradeDB.levelCache = {}
         DEFAULT_CHAT_FRAME:AddMessage("|cffffd100HCTrade:|r Level cache cleared.")
 
+    elseif cmd == "toggle" or cmd == "on" or cmd == "off" then
+        if cmd == "on" then
+            notificationsEnabled = true
+        elseif cmd == "off" then
+            notificationsEnabled = false
+        else
+            notificationsEnabled = not notificationsEnabled
+        end
+        HCTradeDB.notificationsEnabled = notificationsEnabled
+        local state = notificationsEnabled and "|cff00cc00ENABLED|r" or "|cffff4444DISABLED|r"
+        DEFAULT_CHAT_FRAME:AddMessage("|cffffd100HCTrade:|r Notifications " .. state)
+        if menuFrame and menuFrame.chkEnabled then
+            menuFrame.chkEnabled:SetChecked(notificationsEnabled and 1 or 0)
+        end
+
     elseif cmd == "help" or cmd == "" then
         DEFAULT_CHAT_FRAME:AddMessage("|cffffd100HCTrade:|r To get help, type |cffffffff/hct help |cff00ffff<command>|r for details.")
         DEFAULT_CHAT_FRAME:AddMessage("|cffffd100HCTrade:|r Example: |cffffffff/hct help |cff00ffffstatus|r")
         DEFAULT_CHAT_FRAME:AddMessage("|cffffd100HCTrade:|r List of commands:")
         DEFAULT_CHAT_FRAME:AddMessage("  |cffffffff/hct |cff00ffffmenu|r   |cffffffff/hct |cff00fffftest|r    |cffffffff/hct |cff00ffffunlock|r  |cffffffff/hct |cff00fffflock|r")
         DEFAULT_CHAT_FRAME:AddMessage("  |cffffffff/hct |cff00ffffdebug|r  |cffffffff/hct |cff00ffffsniff|r   |cffffffff/hct |cff00ffffstatus|r  |cffffffff/hct |cff00ffffhook N|r")
-        DEFAULT_CHAT_FRAME:AddMessage("  |cffffffff/hct |cff00ffffls|r     |cffffffff/hct |cff00ffffrm N|r  |cffffffff/hct |cff00ffffcache|r")
+        DEFAULT_CHAT_FRAME:AddMessage("  |cffffffff/hct |cff00ffffls|r     |cffffffff/hct |cff00ffffrm N|r  |cffffffff/hct |cff00ffffcache|r  |cffffffff/hct |cff00ffffon|r/|cff00ffffoff|r")
 
     elseif string.sub(cmd, 1, 5) == "help " then
         local topic = string.gsub(cmd, "^help%s+", "")
@@ -2247,6 +2325,11 @@ SlashCmdList["HCT"] = function(msg)
             DEFAULT_CHAT_FRAME:AddMessage("  raid, target, mouseover, and /who results. These are used as")
             DEFAULT_CHAT_FRAME:AddMessage("  a fallback when a WTS/WTB has no level in the message.")
             DEFAULT_CHAT_FRAME:AddMessage("  Use |cffffffff/hct cache clear|r to wipe the cache.")
+        elseif topic == "toggle" or topic == "on" or topic == "off" then
+            DEFAULT_CHAT_FRAME:AddMessage(G .. "toggle|r - Enables/disables all popups and sounds.")
+            DEFAULT_CHAT_FRAME:AddMessage("  Use |cffffffff/hct on|r or |cffffffff/hct off|r to set explicitly.")
+            DEFAULT_CHAT_FRAME:AddMessage("  Background scans (inventory, level cache) keep running so")
+            DEFAULT_CHAT_FRAME:AddMessage("  re-enabling is instant. /hct test still works when disabled.")
         else
             DEFAULT_CHAT_FRAME:AddMessage("|cffff4444HCTrade:|r Unknown command '" .. topic .. "'. Type /hct help for a list.")
         end
