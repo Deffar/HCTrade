@@ -4,6 +4,11 @@
 
 ---
 
+<img width="450" height="605" alt="image" src="https://github.com/user-attachments/assets/86d2beb8-c76f-4813-9a5b-4b08194ac846" />
+<br>
+<img width="306" height="163" alt="image" src="https://github.com/user-attachments/assets/85354716-4e37-472d-8ea5-5bda9b047433" />
+<img width="246" height="143" alt="image" src="https://github.com/user-attachments/assets/ff9b1445-04f1-4c7e-b870-636e6dfb4948" />
+
 ## Features
 
 * **Hardcore Chat Filtering**: Scans messages in the Hardcore channel for trade activity.
@@ -24,10 +29,7 @@
 * **Sound Alerts**: Separate sounds for trade notifications (WTS), WTB/WTT inventory matches, and profession requests — each can be muted independently.
 * **Class-Colored Sender Names**: Sender names in popups are colored by class when known (cached from friends list, guild roster, party, raid, target, mouseover, and /who results).
 
-  <img width="440" height="541" alt="image" src="https://github.com/user-attachments/assets/a68ea854-dea0-4f46-b742-871801287f47" />
-  <img width="416" height="209" alt="image" src="https://github.com/user-attachments/assets/bea21427-5d61-4db3-8b13-3202782f372c" />
-  <img width="273" height="161" alt="image" src="https://github.com/user-attachments/assets/bb668588-86cb-48b5-bbf7-970d7fc05163" />
-  <img width="271" height="137" alt="image" src="https://github.com/user-attachments/assets/4a27d623-6d76-4a3c-beea-445c8c1a84fa" />
+
 
 ---
 
