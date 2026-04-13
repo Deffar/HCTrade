@@ -1366,13 +1366,22 @@ end
 
 local function DoHook(frame, label)
     if hookedFrame == frame then return end
+
+    -- Unhook previous frame if any: restore its original AddMessage
+    if hookedFrame and hookedFrame._hctOrigAddMessage then
+        hookedFrame.AddMessage = hookedFrame._hctOrigAddMessage
+        hookedFrame._hctOrigAddMessage = nil
+        DEFAULT_CHAT_FRAME:AddMessage("|cffffd100HCTrade:|r Unhooked previous frame.")
+    end
+
     hookedFrame = frame
 
+    -- Save original on the frame itself so we can restore it later
+    frame._hctOrigAddMessage = frame.AddMessage
     local origAddMessage = frame.AddMessage
     frame.AddMessage = function(self, text, r, g, b, id)
         origAddMessage(self, text, r, g, b, id)
         if not text then return end
-
         -- Strip for parsing (plain text only)
         local plain = text
         plain = string.gsub(plain, "|H.-|h(.-)%|h", "%1")
@@ -1380,19 +1389,15 @@ local function DoHook(frame, label)
         plain = string.gsub(plain, "|r", "")
         plain = string.gsub(plain, "|T.-|t", "")
         plain = string.gsub(plain, "|[^|]", "")
-
         if sniffMode then
             DEFAULT_CHAT_FRAME:AddMessage("|cffffd100[HCTrade sniff]|r " .. plain)
         end
-
         -- Master + HC sub-toggle gate
         if not (notificationsEnabled and hardcoreEnabled) then return end
-
         -- Channel filter: only process Hardcore channel messages
         if not (string.find(plain, "%[Hardcore%]") or string.find(plain, "^%[HC%]") or string.find(plain, "%s%[HC%]")) then
             return
         end
-
         -- Extract sender and message body
         -- Try [Hardcore] [sender]: format
         local rawSender, msg = string.match(plain, "%[Hardcore%]%s*%[(.-)%]:?%s*(.*)")
@@ -1405,9 +1410,7 @@ local function DoHook(frame, label)
             rawSender, msg = string.match(plain, "<(.-)>%s*(.*)")
         end
         if not rawSender or not msg or msg == "" then return end
-
         local sender = string.match(rawSender, "^%d+:(.+)") or rawSender
-
         -- Extract rawMsg from original text (preserves colour codes and item links)
         local rawMsg = text
         -- Try to strip everything up through "[sender]:" or "<sender>"
@@ -1419,10 +1422,8 @@ local function DoHook(frame, label)
             stripped = string.match(rawMsg, "<.->%s*(.*)")
         end
         rawMsg = stripped or msg
-
         ProcessHCMessage(sender, msg, rawMsg)
     end
-
     DEFAULT_CHAT_FRAME:AddMessage("|cffffd100HCTrade:|r Hooked frame " .. label .. ".")
 end
 
