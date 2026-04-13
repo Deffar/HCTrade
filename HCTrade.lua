@@ -1524,7 +1524,20 @@ eventFrame:SetScript("OnEvent", function()
         ScanRaidLevels()
         -- Auto-hook HC chat frame if not already hooked
         if not hookedFrame then
-            HookHCFrame()
+            -- Try saved manual choice first
+            if HCTradeDB.hookedIndex then
+                local savedFrame = getglobal("ChatFrame" .. HCTradeDB.hookedIndex)
+                if savedFrame then
+                    local tab = getglobal("ChatFrame" .. HCTradeDB.hookedIndex .. "Tab")
+                    local title = (tab and tab:GetText()) or "?"
+                    hookedIndex = HCTradeDB.hookedIndex
+                    DoHook(savedFrame, HCTradeDB.hookedIndex .. ' ("' .. title .. '") [restored]')
+                else
+                    HookHCFrame()
+                end
+            else
+                HookHCFrame()
+            end
         end
     end
     
@@ -2283,6 +2296,7 @@ SlashCmdList["HCT"] = function(msg)
         end
         hookedFrame = nil
         hookedIndex = n
+        HCTradeDB.hookedIndex = n  -- persist user's manual choice
         local tab   = getglobal("ChatFrame" .. n .. "Tab")
         local title = (tab and tab:GetText()) or "?"
         DoHook(frame, n .. ' ("' .. title .. '")')
