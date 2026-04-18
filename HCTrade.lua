@@ -532,7 +532,14 @@ local PROFESSION_ITEMS = {
 -- Returns the matching profession entry if msg mentions one of the player's professions
 local function MatchesProfession(msg)
     local s = string.lower(msg)
-    
+
+    -- Gate: only match professions if the message is a request for services,
+    -- not a WTS post. Require either WTB or a "looking for" keyword.
+    local hasLookingFor = string.find(s, "%f[%a]lfc?%f[%A]") or
+                          string.find(s, "looking for") or
+                          string.find(s, "%f[%a]wtb%f[%A]")
+    if not hasLookingFor then return nil end
+
     -- First check direct profession mentions (LF BS, LF Enchanter, etc.)
     for _, prof in ipairs(playerProfessions) do
         for _, abbrev in ipairs(prof.abbrevs) do
