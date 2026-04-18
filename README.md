@@ -1,6 +1,6 @@
 # HCTrade (WoW 1.12.1)
 
-**HCTrade** is a notification tool for WoW 1.12.1 designed to monitor Hardcore and Guild chat. It filters messages to identify "WTS", "WTB", or "WTT" posts and displays a popup alert if the trade falls within your level proximity.
+**HCTrade** is a notification tool for WoW 1.12.1 designed to monitor Hardcore and Guild chat. It filters messages to identify "WTS", "WTB", or "WTT" posts and displays a popup alert if the trade falls within your level range.
 
 ---
 
