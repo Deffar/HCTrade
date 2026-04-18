@@ -17,25 +17,12 @@
 
 ## Features
 
-* **Hardcore Chat Filtering**: Scans messages in the Hardcore channel for trade activity.
-* **Guild Chat Filtering**: Independently monitors guild chat via the `CHAT_MSG_GUILD` event. Works regardless of which chat tabs display guild chat — no duplicate notifications even if guild is shown in multiple tabs, and no chat tab setup required.
-* **Three-Tier Notification Toggle**: Master "Notifications" switch plus independent "Hardcore Notifications" and "Guild Notifications" sub-toggles. Disabling the master grays out and locks both sub-toggles.
-* **Level Proximity Matching**: Detects level ranges (e.g., "10-20", "25+-", "40±", "23+") and triggers an alert if your character is within 5 levels of the trade. The same level filtering applies to both Hardcore and Guild messages.
-* **Custom Keywords**: Add custom items to watch for (e.g., "armor kit", "wand") with automatic plural/singular matching and color-coded display.
-* **Item Color Coding**: Items you own (in bags or bank) automatically display in their quality colors (green/blue/purple/etc) in popups.
-* **Profession Matching**: Alerts when someone needs your profession skills, including crafting requests like "craft my mats".
-* **Inventory Alerts**: Get notified when someone wants to buy items you have in your bags or bank (shows location: "In Bags", "In Bank", or "Bags + Bank").
-* **WTB Filtering**: Optional filter to only show WTB messages if you own at least one of the mentioned items.
-* **Bank Scanning**: Automatically scans your bank when opened and caches the items - alerts work even when bank is closed.
-* **One-Click Whispers**: Click the player's name in the alert to automatically open a whisper to that sender.
-* **Right-Click Dismiss**: Right-click anywhere on a popup to dismiss it instantly.
-* **ESC to Clear All**: Press ESC while popups are visible to dismiss the entire stack at once.
-* **Adjustable Popup Duration**: Set how long popups stay on screen (5-30 seconds) with an in-game slider.
-* **Adjustable Layout**: Move and lock the notification area anywhere on your screen using a dedicated anchor.
-* **Sound Alerts**: Separate sounds for trade notifications (WTS), WTB/WTT inventory matches, and profession requests — each can be muted independently.
-* **Class-Colored Sender Names**: Sender names in popups are colored by class when known (cached from friends list, guild roster, party, raid, target, mouseover, and /who results).
-
-
+* **Smart Trade Filtering**: Automatically scans Hardcore and Guild chat for trade activity.
+* **Level Proximity Alerts**: Only notifies you if a trade is within 5 levels of your character.
+* **Inventory & Bank Awareness**: Alerts you when someone wants to buy an item you currently own (even if it's in your bank).
+* **Profession Matching**: Notifies you when players are looking for your specific crafting services (e.g., "LF BS" or "craft my mats").
+* **Custom Keywords**: Set your own "Watch List" for specific items like "armor kit" or "wand".
+* **Interactive Popups**: Click a name to whisper instantly, or right-click or ESC to dismiss.
 
 ---
 
